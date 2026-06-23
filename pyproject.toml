@@ -33,6 +33,10 @@ dependencies = [
     # rather than authlib because we only need the offline JWT verifier
     # — the [cryptography] extra pulls the RS256/ES256 backends.
     "python-jose[cryptography]>=3.3.0",
+    # YAML parser for the `darla-admin monitored-domain reload`
+    # command (RFC §9).  Already a transitive dep of other libs but
+    # we depend on it directly here so it can't disappear under us.
+    "PyYAML>=6.0",
 ]
 
 [project.optional-dependencies]
@@ -68,6 +72,9 @@ render = [
 
 [project.scripts]
 darla = "darla.cli:app"
+# Operator-facing admin CLI (RFC §9).  Runs inside the API container
+# via SSM in prod; locally via `docker compose exec api darla-admin ...`
+darla-admin = "darla.admin.cli:app"
 
 [tool.setuptools.packages.find]
 where = ["src"]
