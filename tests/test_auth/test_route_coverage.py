@@ -132,7 +132,6 @@ def test_writes_require_analyst_role():
         ("DELETE", "/api/v1/families/{family_id}"),
         ("DELETE", "/api/v1/investigations/{investigation_id}"),
         ("DELETE", "/api/v1/kits/{kit_id}"),
-        ("DELETE", "/api/v1/monitored-domains/{domain_id}"),
         ("DELETE", "/api/v1/phishmatch/kit/{kit_id}/attribute"),
         ("DELETE", "/api/v1/yara/rules/user/{name}"),
         # Not a write but reveals deployment shape — analyst-gated per
@@ -158,7 +157,6 @@ def test_writes_require_analyst_role():
         ("POST", "/api/v1/kits/{kit_id}/add-to-campaign"),
         ("POST", "/api/v1/kits/{kit_id}/add-to-family"),
         ("POST", "/api/v1/kits/{kit_id}/reanalyze"),
-        ("POST", "/api/v1/monitored-domains"),
         ("POST", "/api/v1/phishmatch/kit/{kit_id}/attribute"),
         ("POST", "/api/v1/yara/compile"),
         ("POST", "/api/v1/yara/playground"),
@@ -166,8 +164,6 @@ def test_writes_require_analyst_role():
         ("PUT", "/api/v1/campaigns/{campaign_id}"),
         ("PUT", "/api/v1/families/{family_id}"),
         ("PUT", "/api/v1/investigations/{investigation_id}"),
-        ("PUT", "/api/v1/monitored-domains/{domain_id}"),
-        ("PUT", "/api/v1/victims/{victim_id}"),
         ("PUT", "/api/v1/yara/rules/user/{name}"),
     }
 

@@ -1,35 +1,33 @@
-"""Victim API endpoints — powers the PhishPrint pages.
+"""Victim read-only endpoints — powers the PhishPrint pages.
 
 Victim creation is intentionally NOT exposed.  Victims are
 pipeline-managed: emails observed during analysis whose domain
 matches a row in :class:`MonitoredDomain` get promoted via
 :func:`darla.services.victim_service.observe_victim_email`.
-Operators interact with the existing rows: list, view, edit
-``display_name`` / ``type`` / ``notes``, query observations.
+
+Victim **edits** also moved out of the HTTP API in Phase 6b (RFC §9
+decision #14: PII-bearing rows are managed via the operator CLI,
+not the HTTP surface).  Use ``darla-admin victim reload --source
+<csv>`` for bulk updates — see :mod:`darla.admin.victims`.  Reads
+stay so the PhishPrint UI can render the per-employee dashboard
+and per-victim detail page.
 """
 
 import uuid
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi import APIRouter, HTTPException, Query, Request
 
 from darla.api.deps import DbSession, Pagination
-from darla.auth import require_role, set_audit_extra
-from darla.models import UserRole
+from darla.auth import set_audit_extra
 from darla.models.victim import VictimType
 from darla.schemas.victim import (
     VictimDetail,
     VictimListResponse,
     VictimObservationListResponse,
-    VictimUpdate,
 )
 from darla.services.victim_service import VictimService
 
 router = APIRouter()
-
-# Victim writes will move to a CLI/CSV-driven path in Phase 6 (RFC §9);
-# until then, ANALYST-gated rather than anonymous.  Reads stay analyst-
-# adjacent for the per-employee dashboard.
-_ANALYST = [Depends(require_role(UserRole.ANALYST))]
 
 
 @router.get("", response_model=VictimListResponse)
@@ -75,23 +73,6 @@ async def get_victim(victim_id: uuid.UUID, request: Request, db: DbSession):
         raise HTTPException(status_code=404, detail="Victim not found")
     # Single-victim read — record the ID accessed so the audit log
     # can answer per-victim "who looked at this person's record" queries.
-    set_audit_extra(request, victim_ids=[str(victim.id)])
-    return victim
-
-
-@router.put("/{victim_id}", response_model=VictimDetail, dependencies=_ANALYST)
-async def update_victim(
-    victim_id: uuid.UUID,
-    payload: VictimUpdate,
-    request: Request,
-    db: DbSession,
-):
-    service = VictimService(db)
-    victim = await service.update_victim(
-        victim_id, payload.model_dump(exclude_unset=True),
-    )
-    if victim is None:
-        raise HTTPException(status_code=404, detail="Victim not found")
     set_audit_extra(request, victim_ids=[str(victim.id)])
     return victim
 
