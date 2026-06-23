@@ -1,4 +1,8 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+// Read-only hooks.  Victim edits live behind `darla-admin victim
+// reload --source <csv>` (RFC §9, Phase 6b).  The previous
+// useUpdateVictim hook was removed alongside its HTTP endpoint.
+
+import { useQuery } from "@tanstack/react-query";
 import { victims } from "@/lib/api";
 import type { VictimType } from "@/types/api";
 
@@ -33,25 +37,6 @@ export function useVictim(id: string | undefined) {
     queryKey: ["victim", id],
     queryFn: () => victims.get(id!),
     enabled: !!id,
-  });
-}
-
-export function useUpdateVictim() {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: ({
-      id,
-      ...data
-    }: {
-      id: string;
-      display_name?: string | null;
-      type?: VictimType;
-      notes?: string | null;
-    }) => victims.update(id, data),
-    onSuccess: (_data, vars) => {
-      qc.invalidateQueries({ queryKey: ["victim", vars.id] });
-      qc.invalidateQueries({ queryKey: ["victims"] });
-    },
   });
 }
 

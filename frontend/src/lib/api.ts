@@ -517,6 +517,9 @@ export const phishmatch = {
 };
 
 // ── PhishPrint ──
+//
+// Writes for monitored-domains and victims live behind `darla-admin`
+// (RFC §9, Phase 6b).  Only read methods are exposed here.
 
 export const monitoredDomains = {
   list: (offset = 0, limit = 200) =>
@@ -525,18 +528,6 @@ export const monitoredDomains = {
     ),
   get: (id: string) =>
     request<MonitoredDomain>(`/monitored-domains/${id}`),
-  create: (data: { domain: string; description?: string }) =>
-    request<MonitoredDomain>("/monitored-domains", {
-      method: "POST",
-      body: JSON.stringify(data),
-    }),
-  update: (id: string, data: Partial<MonitoredDomain>) =>
-    request<MonitoredDomain>(`/monitored-domains/${id}`, {
-      method: "PUT",
-      body: JSON.stringify(data),
-    }),
-  delete: (id: string) =>
-    request<void>(`/monitored-domains/${id}`, { method: "DELETE" }),
 };
 
 export const victims = {
@@ -556,14 +547,6 @@ export const victims = {
     return request<PaginatedResponse<VictimSummary>>(`/victims?${q}`);
   },
   get: (id: string) => request<VictimDetail>(`/victims/${id}`),
-  update: (
-    id: string,
-    data: { display_name?: string | null; type?: VictimType; notes?: string | null },
-  ) =>
-    request<VictimDetail>(`/victims/${id}`, {
-      method: "PUT",
-      body: JSON.stringify(data),
-    }),
   observations: (id: string, offset = 0, limit = 100) =>
     request<PaginatedResponse<VictimObservation>>(
       `/victims/${id}/observations?offset=${offset}&limit=${limit}`,

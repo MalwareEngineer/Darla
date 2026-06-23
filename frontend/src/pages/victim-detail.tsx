@@ -1,20 +1,16 @@
-import { useMemo, useState } from "react";
+import { useMemo } from "react";
 import { Link, useParams } from "react-router-dom";
 import {
   ArrowLeft,
-  Check,
-  Pencil,
-  X,
   Mail,
   CalendarClock,
   Activity,
   StickyNote,
+  Terminal,
 } from "lucide-react";
-import { toast } from "sonner";
 
 import {
   useVictim,
-  useUpdateVictim,
   useVictimObservations,
 } from "@/hooks/use-victims";
 import { PageLoading } from "@/components/shared/loading";
@@ -29,15 +25,6 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
 import type {
   VictimObservationSource,
   VictimType,
@@ -81,188 +68,52 @@ function formatTime(iso: string | null | undefined): string {
 }
 
 // ---------------------------------------------------------------------------
-// Inline display-name editor.  Pencil-icon-on-hover affordance + save on
-// Enter / blur, cancel on Escape.  Empty save = clear (back to email-only
-// view in the trigger).
+// Read-only notes card.  Edits moved to the `darla-admin victim reload`
+// CSV path (RFC §9 / Phase 6b) — victim records are PII-bearing and the
+// authoritative path now goes through the operator CLI under AWS-IAM
+// rather than the HTTP API.
 // ---------------------------------------------------------------------------
 
-function EditableDisplayName({
-  value,
-  onSave,
-  isPending,
-}: {
-  value: string | null;
-  onSave: (next: string | null) => void;
-  isPending?: boolean;
-}) {
-  const [editing, setEditing] = useState(false);
-  const [draft, setDraft] = useState(value ?? "");
-  // Reset the draft when the upstream ``value`` changes — e.g. after
-  // a successful save invalidates the query and refetches.  Per
-  // https://react.dev/learn/you-might-not-need-an-effect, the right
-  // pattern for "sync state with prop" is to track the previous prop
-  // and reset during render rather than via useEffect.
-  const [previousValue, setPreviousValue] = useState(value);
-  if (previousValue !== value) {
-    setPreviousValue(value);
-    setDraft(value ?? "");
-  }
-
-  if (editing) {
-    return (
-      <div className="flex items-center gap-2">
-        <Input
-          value={draft}
-          onChange={(e) => setDraft(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === "Enter") {
-              const next = draft.trim();
-              onSave(next || null);
-              setEditing(false);
-            } else if (e.key === "Escape") {
-              setDraft(value ?? "");
-              setEditing(false);
-            }
-          }}
-          autoFocus
-          placeholder="John Smith — VP Finance"
-          className="max-w-md"
-        />
-        <Button
-          size="sm"
-          variant="ghost"
-          className="h-8 px-2"
-          onClick={() => {
-            const next = draft.trim();
-            onSave(next || null);
-            setEditing(false);
-          }}
-          disabled={isPending}
-        >
-          <Check className="h-4 w-4" />
-        </Button>
-        <Button
-          size="sm"
-          variant="ghost"
-          className="h-8 px-2"
-          onClick={() => {
-            setDraft(value ?? "");
-            setEditing(false);
-          }}
-        >
-          <X className="h-4 w-4" />
-        </Button>
-      </div>
-    );
-  }
-
+function NotesCard({ value }: { value: string | null }) {
   return (
-    <div
-      className="group inline-flex items-center gap-2 cursor-pointer"
-      onClick={() => setEditing(true)}
-    >
-      {value ? (
-        <span className="text-base text-foreground">{value}</span>
-      ) : (
-        <span className="text-sm text-muted-foreground italic">
-          Add a display name…
-        </span>
-      )}
-      <Pencil className="h-3.5 w-3.5 text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity" />
-    </div>
+    <Card>
+      <CardHeader className="pb-2">
+        <CardTitle className="text-sm font-medium flex items-center gap-2">
+          <StickyNote className="h-4 w-4" />
+          Operator notes
+        </CardTitle>
+      </CardHeader>
+      <CardContent>
+        <p className="text-sm text-muted-foreground whitespace-pre-wrap">
+          {value || "No notes recorded."}
+        </p>
+      </CardContent>
+    </Card>
   );
 }
 
 // ---------------------------------------------------------------------------
-// Notes — same EditableDescription pattern but local to this page so we
-// don't need to generalize the shared component yet.
+// Inline notice that this record is managed via the operator CLI.  Lives
+// at the top of the page so an analyst clicking around realises the
+// edit affordances they're used to have moved out-of-band.
 // ---------------------------------------------------------------------------
 
-function EditableNotes({
-  value,
-  onSave,
-  isPending,
-}: {
-  value: string | null;
-  onSave: (next: string | null) => void;
-  isPending?: boolean;
-}) {
-  const [editing, setEditing] = useState(false);
-  const [draft, setDraft] = useState(value ?? "");
-  const [previousValue, setPreviousValue] = useState(value);
-  if (previousValue !== value) {
-    setPreviousValue(value);
-    setDraft(value ?? "");
-  }
-
+function CliManagedNotice() {
   return (
-    <Card>
-      <CardHeader className="pb-2">
-        <div className="flex items-center justify-between">
-          <CardTitle className="text-sm font-medium flex items-center gap-2">
-            <StickyNote className="h-4 w-4" />
-            Operator notes
-          </CardTitle>
-          {!editing && (
-            <Button
-              variant="ghost"
-              size="sm"
-              className="h-7 px-2"
-              onClick={() => setEditing(true)}
-            >
-              <Pencil className="h-3.5 w-3.5" />
-            </Button>
-          )}
-        </div>
-      </CardHeader>
-      <CardContent>
-        {editing ? (
-          <div className="space-y-2">
-            <textarea
-              className="flex min-h-[100px] w-full rounded-md border border-input bg-transparent px-3 py-2 text-sm shadow-sm placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-ring resize-y"
-              value={draft}
-              onChange={(e) => setDraft(e.target.value)}
-              autoFocus
-              placeholder="Notes — context the pipeline can't infer (recent role change, leaving the org, special handling, etc.)"
-            />
-            <div className="flex gap-2">
-              <Button
-                size="sm"
-                className="h-7"
-                onClick={() => {
-                  const next = draft.trim();
-                  onSave(next || null);
-                  setEditing(false);
-                }}
-                disabled={isPending}
-              >
-                <Check className="h-3.5 w-3.5 mr-1" />
-                {isPending ? "Saving…" : "Save"}
-              </Button>
-              <Button
-                size="sm"
-                variant="ghost"
-                className="h-7"
-                onClick={() => {
-                  setDraft(value ?? "");
-                  setEditing(false);
-                }}
-              >
-                <X className="h-3.5 w-3.5 mr-1" />
-                Cancel
-              </Button>
-            </div>
-          </div>
-        ) : (
-          <p
-            className="text-sm text-muted-foreground cursor-pointer hover:text-foreground transition-colors whitespace-pre-wrap"
-            onClick={() => setEditing(true)}
-          >
-            {value || "No notes — click to add"}
-          </p>
-        )}
-      </CardContent>
-    </Card>
+    <div className="flex items-start gap-2 rounded-md border border-amber-500/30 bg-amber-500/5 p-3 text-xs text-muted-foreground">
+      <Terminal className="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-600" />
+      <div>
+        <span className="font-medium text-foreground">Managed via CLI.</span>
+        {" "}Update display name, type, or notes by editing the HR CSV
+        and running{" "}
+        <code className="font-mono text-foreground">
+          darla-admin victim reload --source &lt;csv&gt;
+        </code>{" "}
+        from inside the API container. Pipeline-driven first/last-seen
+        timestamps continue to update automatically as new kits are
+        analysed.
+      </div>
+    </div>
   );
 }
 
@@ -326,14 +177,8 @@ export function VictimDetailPage() {
   const { id } = useParams<{ id: string }>();
   const { data: victim, isLoading } = useVictim(id);
   const { data: obsData } = useVictimObservations(id, 0, 100);
-  const update = useUpdateVictim();
 
   if (isLoading || !victim || !id) return <PageLoading />;
-
-  const renderTypeName = (value: string | null) => {
-    if (!value) return TYPE_LABEL[victim.type];
-    return TYPE_LABEL[value as VictimType] ?? value;
-  };
 
   return (
     <div className="space-y-6">
@@ -355,48 +200,29 @@ export function VictimDetailPage() {
               {victim.email}
             </h1>
           </div>
-          <EditableDisplayName
-            value={victim.display_name}
-            onSave={(next) =>
-              update.mutate(
-                { id, display_name: next },
-                {
-                  onSuccess: () => toast.success("Display name updated"),
-                  onError: (err) => toast.error(err.message),
-                },
-              )
-            }
-            isPending={update.isPending}
-          />
+          {victim.display_name ? (
+            <span className="text-base text-foreground">
+              {victim.display_name}
+            </span>
+          ) : (
+            <span className="text-sm text-muted-foreground italic">
+              No display name configured
+            </span>
+          )}
         </div>
 
         <div className="flex items-center gap-3">
           <span className="text-xs text-muted-foreground">Type</span>
-          <Select
-            value={victim.type}
-            onValueChange={(v) =>
-              update.mutate(
-                { id, type: v as VictimType },
-                {
-                  onSuccess: () => toast.success("Type updated"),
-                  onError: (err) => toast.error(err.message),
-                },
-              )
-            }
+          <Badge
+            variant={TYPE_BADGE_VARIANT[victim.type]}
+            className="text-sm px-3 py-1"
           >
-            <SelectTrigger className="w-44">
-              <SelectValue>{renderTypeName}</SelectValue>
-            </SelectTrigger>
-            <SelectContent>
-              {(Object.keys(TYPE_LABEL) as VictimType[]).map((t) => (
-                <SelectItem key={t} value={t}>
-                  {TYPE_LABEL[t]}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
+            {TYPE_LABEL[victim.type]}
+          </Badge>
         </div>
       </div>
+
+      <CliManagedNotice />
 
       <Card>
         <CardContent className="grid gap-4 p-4 md:grid-cols-4">
@@ -440,19 +266,7 @@ export function VictimDetailPage() {
         </CardContent>
       </Card>
 
-      <EditableNotes
-        value={victim.notes}
-        onSave={(next) =>
-          update.mutate(
-            { id, notes: next },
-            {
-              onSuccess: () => toast.success("Notes updated"),
-              onError: (err) => toast.error(err.message),
-            },
-          )
-        }
-        isPending={update.isPending}
-      />
+      <NotesCard value={victim.notes} />
 
       <Card>
         <CardHeader className="pb-2">

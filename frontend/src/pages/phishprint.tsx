@@ -1,14 +1,9 @@
 import { useMemo, useState } from "react";
 import { Link } from "react-router-dom";
-import { Fingerprint, Plus, Trash2, Globe, AlertCircle } from "lucide-react";
-import { toast } from "sonner";
+import { Fingerprint, Globe, AlertCircle, Terminal } from "lucide-react";
 
 import { useVictims } from "@/hooks/use-victims";
-import {
-  useCreateMonitoredDomain,
-  useDeleteMonitoredDomain,
-  useMonitoredDomains,
-} from "@/hooks/use-monitored-domains";
+import { useMonitoredDomains } from "@/hooks/use-monitored-domains";
 import { Pagination } from "@/components/shared/pagination";
 import { TableLoading } from "@/components/shared/loading";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -20,8 +15,6 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import {
   Select,
@@ -69,55 +62,15 @@ function relativeTime(iso: string | null): string {
 }
 
 // ---------------------------------------------------------------------------
-// Monitored-domain admin block — gates Victim creation, so it deserves
-// prominent placement at the top of the page rather than hidden in a
-// separate route.  Inline list + add form covers the day-to-day flow
-// (add a subsidiary domain, see the resulting victims appear).
+// Monitored-domain read-only block — list-only view of the allowlist that
+// gates Victim creation.  Writes moved to the `darla-admin
+// monitored-domain reload <yaml>` CLI (RFC §9 / Phase 6b) because the
+// allowlist is org-protected configuration that belongs behind the
+// AWS-IAM boundary, not the HTTP API.
 // ---------------------------------------------------------------------------
 
 function MonitoredDomainsBlock() {
   const { data, isLoading } = useMonitoredDomains(0, 200);
-  const create = useCreateMonitoredDomain();
-  const remove = useDeleteMonitoredDomain();
-
-  const [newDomain, setNewDomain] = useState("");
-  const [newDescription, setNewDescription] = useState("");
-
-  const handleAdd = () => {
-    const domain = newDomain.trim().toLowerCase();
-    if (!domain) return;
-    create.mutate(
-      {
-        domain,
-        description: newDescription.trim() || undefined,
-      },
-      {
-        onSuccess: () => {
-          toast.success(`Added ${domain} to monitored domains`);
-          setNewDomain("");
-          setNewDescription("");
-        },
-        onError: (err) => toast.error(err.message),
-      },
-    );
-  };
-
-  const handleDelete = (id: string, domain: string) => {
-    if (
-      !window.confirm(
-        `Stop monitoring "${domain}"?  Existing Victim rows for this domain ` +
-          `will remain (so historical attack-surface data isn't lost), but ` +
-          `new observations of those addresses will no longer create new ` +
-          `Victim entries.`,
-      )
-    ) {
-      return;
-    }
-    remove.mutate(id, {
-      onSuccess: () => toast.success(`Removed ${domain}`),
-      onError: (err) => toast.error(err.message),
-    });
-  };
 
   return (
     <Card>
@@ -143,33 +96,20 @@ function MonitoredDomainsBlock() {
           Indicators (full IOC search) but don't become Victims.
         </p>
 
-        <div className="flex gap-2">
-          <Input
-            placeholder="acme.com"
-            value={newDomain}
-            onChange={(e) => setNewDomain(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter") handleAdd();
-            }}
-            className="max-w-[14rem] font-mono text-sm"
-          />
-          <Input
-            placeholder="Description (optional)"
-            value={newDescription}
-            onChange={(e) => setNewDescription(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter") handleAdd();
-            }}
-            className="flex-1"
-          />
-          <Button
-            size="sm"
-            onClick={handleAdd}
-            disabled={!newDomain.trim() || create.isPending}
-          >
-            <Plus className="mr-1 h-4 w-4" />
-            {create.isPending ? "Adding…" : "Add"}
-          </Button>
+        <div className="flex items-start gap-2 rounded-md border border-amber-500/30 bg-amber-500/5 p-3 text-xs text-muted-foreground">
+          <Terminal className="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-600" />
+          <div>
+            <span className="font-medium text-foreground">Managed via CLI.</span>
+            {" "}Edit{" "}
+            <code className="font-mono text-foreground">monitored_domains.yaml</code>
+            {" "}in the deployment repo, then run{" "}
+            <code className="font-mono text-foreground">
+              darla-admin monitored-domain reload --source &lt;yaml&gt;
+            </code>{" "}
+            from inside the API container. Use{" "}
+            <code className="font-mono text-foreground">--dry-run</code>
+            {" "}first to preview the diff.
+          </div>
         </div>
 
         {isLoading ? (
@@ -181,7 +121,6 @@ function MonitoredDomainsBlock() {
                 <TableRow>
                   <TableHead>Domain</TableHead>
                   <TableHead>Description</TableHead>
-                  <TableHead className="w-24"></TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -191,17 +130,6 @@ function MonitoredDomainsBlock() {
                     <TableCell className="text-sm text-muted-foreground">
                       {d.description || "—"}
                     </TableCell>
-                    <TableCell className="text-right">
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        className="h-8 px-2 text-destructive hover:bg-destructive/10 hover:text-destructive"
-                        onClick={() => handleDelete(d.id, d.domain)}
-                        disabled={remove.isPending}
-                      >
-                        <Trash2 className="h-3.5 w-3.5" />
-                      </Button>
-                    </TableCell>
                   </TableRow>
                 ))}
               </TableBody>
@@ -209,8 +137,11 @@ function MonitoredDomainsBlock() {
           </div>
         ) : (
           <div className="rounded-md border border-dashed p-6 text-center text-sm text-muted-foreground">
-            No domains monitored yet. Add one above to start promoting
-            observed emails on that domain to Victim entities.
+            No monitored domains configured. Add entries via{" "}
+            <code className="font-mono text-foreground">
+              darla-admin monitored-domain reload
+            </code>{" "}
+            to start promoting observed emails to Victim entities.
           </div>
         )}
       </CardContent>
