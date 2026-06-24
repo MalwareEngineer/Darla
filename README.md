@@ -18,6 +18,11 @@ Verify everything is running:
 curl http://localhost:8000/api/v1/health
 ```
 
+The default configuration runs in **community / no-auth mode** suitable for
+local evaluation by a single user. To deploy for a team behind an identity
+provider, see [docs/auth/](docs/auth/README.md) — guides for Microsoft Entra,
+Okta, Auth0, Keycloak, Authelia, Pocket-ID, and the generic OIDC pattern.
+
 ### YARA Rules
 
 ```bash
