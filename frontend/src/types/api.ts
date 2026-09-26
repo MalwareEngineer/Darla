@@ -32,7 +32,11 @@ export type AnalysisType =
   | "qr_decode"
   | "link_score"
   | "redirect_chain"
-  | "external_js_fetch";
+  | "external_js_fetch"
+  | "polymorphism"
+  | "artifact_render"
+  | "svg_active_exec"
+  | "oauth_authorize";
 
 // ── Paginated response ──
 
@@ -154,12 +158,12 @@ export interface IndicatorSummary {
   value: string;
   confidence: number;
   source_file?: string;
+  context?: string;
   kit_id: string;
   created_at: string;
 }
 
 export interface IndicatorDetail extends IndicatorSummary {
-  context?: string;
   actor_id?: string;
 }
 
@@ -183,6 +187,8 @@ export interface ActorSummary {
   aliases?: string[];
   first_seen?: string;
   last_seen?: string;
+  // Synthetic ``ACTOR-XXXX`` rows minted by the attribution task.
+  auto_generated: boolean;
   created_at: string;
 }
 
@@ -333,6 +339,51 @@ export interface FamilyDetail extends FamilySummary {
 export interface FamilyBrief {
   id: string;
   name: string;
+}
+
+// Family stats — mirrors darla/schemas/family.py FamilyStats; drives
+// the family-detail Overview tab.
+export interface FamilyBrandCount {
+  brand: string;
+  count: number;
+}
+
+export interface FamilyActorCount {
+  actor_id: string;
+  actor_name: string;
+  count: number;
+}
+
+export interface FamilyYaraRuleCount {
+  rule: string;
+  count: number;
+}
+
+export interface FamilyTimelineBucket {
+  month: string; // YYYY-MM
+  count: number;
+}
+
+export interface FamilyIndicatorCount {
+  type: string;
+  value: string;
+  count: number;
+}
+
+export interface FamilyStats {
+  kit_count: number;
+  actor_count: number;
+  campaign_count: number;
+  indicator_count: number;
+  distinct_sha256_count: number;
+  distinct_tlsh_count: number;
+  first_seen_computed: string | null;
+  last_seen_computed: string | null;
+  target_brand_distribution: FamilyBrandCount[];
+  top_actors: FamilyActorCount[];
+  top_yara_rules: FamilyYaraRuleCount[];
+  timeline: FamilyTimelineBucket[];
+  top_indicators: FamilyIndicatorCount[];
 }
 
 // ── Analysis ──

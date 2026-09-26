@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from "react";
+import { useState, useMemo } from "react";
 import { Link } from "react-router-dom";
 import { useInvestigations, useCreateInvestigation, useCreateInvestigationFromFile, useBulkDeleteInvestigations } from "@/hooks/use-investigations";
 import { EntityLinkSelectors } from "@/components/shared/entity-link-selectors";
@@ -35,17 +35,19 @@ export function InvestigationsPage() {
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [deleteOpen, setDeleteOpen] = useState(false);
 
-  // Clear selection on page change
-  useEffect(() => {
+  // Clear selection on page change (adjust-during-render, not an effect)
+  const [selectionOffset, setSelectionOffset] = useState(offset);
+  if (offset !== selectionOffset) {
+    setSelectionOffset(offset);
     setSelectedIds(new Set());
-  }, [offset]);
+  }
 
   const { data, isLoading } = useInvestigations(offset, PAGE_SIZE);
   const create = useCreateInvestigation();
   const createFromFile = useCreateInvestigationFromFile();
   const bulkDeleteMutation = useBulkDeleteInvestigations();
 
-  const items = data?.items ?? [];
+  const items = useMemo(() => data?.items ?? [], [data]);
   const pageIds = useMemo(() => items.map((inv) => inv.id), [items]);
   const allPageSelected = pageIds.length > 0 && pageIds.every((id) => selectedIds.has(id));
   const somePageSelected = pageIds.some((id) => selectedIds.has(id));

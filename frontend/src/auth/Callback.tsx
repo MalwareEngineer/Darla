@@ -62,7 +62,6 @@ export function AuthCallback() {
       })
       .catch((e: unknown) => {
         const msg = e instanceof Error ? e.message : String(e);
-        // eslint-disable-next-line no-console
         console.error("[auth/callback] sign-in failed:", e);
         setError(msg);
       });

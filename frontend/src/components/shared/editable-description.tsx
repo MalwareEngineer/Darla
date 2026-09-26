@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Pencil, Check, X } from "lucide-react";
@@ -13,9 +13,13 @@ export function EditableDescription({ value, onSave, isPending }: EditableDescri
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(value ?? "");
 
-  useEffect(() => {
+  // Re-seed the draft when the saved value changes (adjust-during-render
+  // pattern — avoids the extra render pass of a setState-in-effect).
+  const [prevValue, setPrevValue] = useState(value);
+  if (value !== prevValue) {
+    setPrevValue(value);
     setDraft(value ?? "");
-  }, [value]);
+  }
 
   const handleSave = () => {
     onSave(draft);

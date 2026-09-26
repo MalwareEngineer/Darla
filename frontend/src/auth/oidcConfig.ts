@@ -43,7 +43,6 @@ export function readOidcEnv(): OidcEnv {
   // and let the backend reject than to render a broken login redirect.
   if (enabled && (!authority || !clientId || !apiScope)) {
     // Visible-on-purpose console warning so the developer notices.
-    // eslint-disable-next-line no-console
     console.warn(
       "[auth] VITE_AUTH_ENABLED=true but one or more of " +
         "VITE_OIDC_AUTHORITY / VITE_OIDC_CLIENT_ID / VITE_OIDC_API_SCOPE " +

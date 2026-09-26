@@ -134,7 +134,7 @@ function IocExtractionView({ data }: { data: Record<string, unknown> }) {
           ))}
         </div>
       )}
-      {data.errors && Array.isArray(data.errors) && (data.errors as string[]).length > 0 && (
+      {Array.isArray(data.errors) && data.errors.length > 0 && (
         <div className="text-xs text-red-400 space-y-0.5">
           {(data.errors as string[]).map((e, i) => (
             <p key={i} className="font-mono">{e}</p>
@@ -251,7 +251,7 @@ function RedirectChainView({ data }: { data: Record<string, unknown> }) {
       {chain.map((step: Record<string, unknown>, i: number) => (
         <div key={i} className="flex items-center gap-2 text-xs">
           <span className="text-muted-foreground w-4 text-right">{i + 1}</span>
-          {step.status && (
+          {!!step.status && (
             <Badge
               variant="outline"
               className={`text-[10px] px-1 ${
