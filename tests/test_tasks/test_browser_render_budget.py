@@ -21,7 +21,6 @@ from dataclasses import dataclass, field
 from darla.models.kit import KitStatus
 from darla.tasks.browser import _can_dispatch_browser_render
 
-
 # ---------------------------------------------------------------------------
 # Stub-based test harness — exercises the COUNT query path through a
 # minimal session-mock so the budget logic itself is what's under test
@@ -56,7 +55,9 @@ class _StubSession:
     def scalar(self) -> int:
         # The function's query is:
         #   func.count(Kit.id)
-        #     .filter(investigation_id == ?, discovery_method == 'browser_render', status == DOWNLOADING)
+        #     .filter(investigation_id == ?,
+        #             discovery_method == 'browser_render',
+        #             status == DOWNLOADING)
         # We don't try to interpret the SQLAlchemy condition objects;
         # instead we resolve by inspecting the filter values via
         # ``compare`` on the column expressions.  Simpler: just count

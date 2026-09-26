@@ -88,6 +88,24 @@ asyncio_mode = "auto"
 target-version = "py312"
 line-length = 100
 src = ["src"]
+# Applied migrations are history: rewriting them for style buys nothing
+# and risks changing what already ran.
+extend-exclude = ["alembic/versions"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "N", "UP", "B", "SIM"]
+
+[tool.ruff.lint.per-file-ignores]
+# One-off operator scripts: long report print()s and user-agent strings.
+"scripts/*" = ["E501"]
+# Embedded JavaScript shipped to the browser — not reflowed.
+"src/darla/analysis/browser_downloader.py" = ["E501"]
+
+[tool.ruff.lint.flake8-bugbear]
+# FastAPI / Typer parameter markers are declarative, evaluated once
+# at import by design — not the mutable-default bug B008 targets.
+extend-immutable-calls = [
+    "fastapi.Depends", "fastapi.Query", "fastapi.Path", "fastapi.Body",
+    "fastapi.File", "fastapi.Form", "fastapi.Header",
+    "typer.Option", "typer.Argument",
+]

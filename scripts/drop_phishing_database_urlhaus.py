@@ -9,7 +9,6 @@ Usage:
 """
 
 import os
-import sys
 
 import psycopg2
 
@@ -38,7 +37,7 @@ def batch_delete(cur, label: str, sql: str) -> int:
 
 
 def main():
-    print(f"Connecting to database…")
+    print("Connecting to database…")
     conn = psycopg2.connect(DSN)
     conn.autocommit = False
     cur = conn.cursor()
@@ -70,7 +69,7 @@ def main():
         print(f"  {table}: {count:,} rows to delete")
     conn.commit()
 
-    print(f"\nPurging Phishing.Database and URLhaus data…\n")
+    print("\nPurging Phishing.Database and URLhaus data…\n")
 
     # Step 1: indicators
     batch_delete(cur, "indicators", f"""

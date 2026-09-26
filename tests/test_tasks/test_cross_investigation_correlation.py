@@ -32,7 +32,6 @@ import inspect
 from darla.tasks import analysis as analysis_module
 from darla.tasks import browser as browser_module
 
-
 # ---------------------------------------------------------------------------
 # Same-investigation matches must keep the FAILED-redundancy branch
 # ---------------------------------------------------------------------------

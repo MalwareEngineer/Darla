@@ -37,8 +37,9 @@ from __future__ import annotations
 import logging
 import uuid
 from collections import defaultdict
+from collections.abc import Iterable
 from dataclasses import dataclass, field
-from typing import Any, Iterable, Literal
+from typing import Any, Literal
 from urllib.parse import urlparse
 
 from sqlalchemy.orm import Session
@@ -499,13 +500,11 @@ class PhishMatchScorer:
 
             # Take the MAX score across members, then merge evidence.
             best_score = 0.0
-            best_kit_id: uuid.UUID | None = None
             merged = SignalBreakdown()
             for member_kit in member_kits:
                 score, bd = per_kit_scores[member_kit.id]
                 if score > best_score:
                     best_score = score
-                    best_kit_id = member_kit.id
                 # Merge evidence — take max per signal so the UI shows
                 # the strongest supporting kit per channel.
                 merged.tlsh = max(merged.tlsh, bd.tlsh)

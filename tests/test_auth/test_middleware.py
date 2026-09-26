@@ -19,20 +19,18 @@ from datetime import UTC, datetime
 from typing import Any
 from unittest.mock import AsyncMock, patch
 
+import jwt
 import pytest
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 from fastapi import HTTPException
-import jwt
 from jwt.algorithms import RSAAlgorithm
 from sqlalchemy import create_engine
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
-from sqlalchemy.orm import Session
 
 from darla.auth.middleware import _map_role, current_user, require_role
 from darla.config import get_settings
 from darla.models import Base, User, UserRole
-
 
 # ---------------------------------------------------------------------------
 # Pure-Python role mapper
@@ -200,7 +198,6 @@ def patched_jwks(rsa_keypair):
 
 def _make_request(token: str | None = None):
     """Build a minimal Starlette Request mock for the middleware."""
-    from starlette.datastructures import Headers
     from starlette.requests import Request
 
     headers = []
@@ -242,7 +239,6 @@ class TestDisabledMode:
         # require_role(ANALYST) with auth disabled returns None — the
         # safety here is the localhost-only bind enforced by guardrails.
         dep = require_role(UserRole.ANALYST)
-        req = _make_request(token=None)
         # Manually invoke the inner dependency with a None user
         # (simulating Depends(current_user) → None)
         result = await dep(user=None)

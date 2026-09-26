@@ -24,7 +24,6 @@ from darla.tasks.analysis import (
     post_download_steps_from_cursor,
 )
 
-
 # ---------------------------------------------------------------------------
 # Step registry consistency — _CHAIN_STEP_NAME_MAP and _CHAIN_STEP_ORDER
 # must agree, and they must cover every step that _post_download_steps()

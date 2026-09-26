@@ -1,6 +1,7 @@
 """Kit business logic."""
 
 import base64
+import contextlib
 import json
 import logging
 import mimetypes
@@ -342,9 +343,6 @@ class KitService:
             "application/x-php", "message/rfc822",
         }
 
-        # Extensions that are generic placeholders — treat as unknown and sniff
-        opaque_exts = {".bin", ".dat", ".tmp", ".download"}
-
         def _is_text_file(fp: Path, kit_mime: str | None = None) -> bool:
             """Check if a file is likely text content."""
             if fp.suffix.lower() in text_exts:
@@ -558,10 +556,8 @@ class KitService:
                 truncated = False
                 max_size = 500 * 1024  # 500KB
                 if is_text and size <= max_size:
-                    try:
+                    with contextlib.suppress(OSError):
                         content = fp.read_text(errors="replace")
-                    except OSError:
-                        pass
                 elif is_text and size > max_size:
                     try:
                         content = fp.read_text(errors="replace")[:max_size]
@@ -841,7 +837,12 @@ class KitService:
                     "tlsh": c.tlsh,
                     "file_size": c.file_size,
                     "distance": distance,
-                    "size_ratio": round(big / small, 3) if kit.file_size and c.file_size and min(kit.file_size, c.file_size) > 0 else 1.0,
+                    "size_ratio": (
+                        round(big / small, 3)
+                        if kit.file_size and c.file_size
+                        and min(kit.file_size, c.file_size) > 0
+                        else 1.0
+                    ),
                     "created_at": c.created_at,
                 })
             pairs.sort(key=lambda x: x["distance"])
@@ -942,7 +943,7 @@ class KitService:
                             "source_url": k.source_url,
                             "tlsh": k.tlsh,
                             "file_size": k.file_size,
-                            "status": k.status.value if hasattr(k.status, "value") else str(k.status),
+                            "status": getattr(k.status, "value", str(k.status)),
                             "created_at": k.created_at,
                         }
                         for k in domain_kits

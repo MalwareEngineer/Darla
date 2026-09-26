@@ -37,13 +37,11 @@ The startup-time controls are:
 from __future__ import annotations
 
 import logging
-import sys
 from typing import NoReturn
 
 import httpx
 
 from darla.config import Settings, get_settings
-
 
 # Verbose enough that nobody types this by accident or copies it
 # without noticing what it claims.  The string is part of the public

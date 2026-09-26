@@ -64,7 +64,8 @@ def list_users(
 
 
 async def _list_users_impl(role: UserRole | None, disabled_only: bool) -> None:
-    async with audited("user.list", {"role": role.value if role else None, "disabled": disabled_only}) as ctx:
+    audit_args = {"role": role.value if role else None, "disabled": disabled_only}
+    async with audited("user.list", audit_args) as ctx:
         # Reuse the audited session for the actual query — same
         # transaction, single round-trip, and the audit row commits
         # alongside the read.

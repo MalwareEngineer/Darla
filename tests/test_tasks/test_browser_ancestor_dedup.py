@@ -22,7 +22,6 @@ from dataclasses import dataclass, field
 
 from darla.tasks.browser import _find_ancestor_match
 
-
 # ---------------------------------------------------------------------------
 # Minimal Kit stand-in — only the attributes _find_ancestor_match reads.
 # Using a dataclass avoids SQLAlchemy session machinery in this unit test.

@@ -18,6 +18,7 @@ Does NOT execute PHP or JS. Only applies known inverse functions in Python.
 
 import base64
 import codecs
+import contextlib
 import json
 import re
 import zlib
@@ -389,19 +390,17 @@ class JSDeobfuscator:
             # or \xNN hex-escaped string literals. Run a cheap resolver pass
             # so URL_PATTERN can find the URL on the output.
             resolved = self._resolve_js_string_literals(plaintext)
-            if resolved and resolved != plaintext:
-                if resolved not in decoded_parts:
-                    decoded_parts.append(resolved)
-                    techniques.append("js_literals_resolved")
+            if resolved and resolved != plaintext and resolved not in decoded_parts:
+                decoded_parts.append(resolved)
+                techniques.append("js_literals_resolved")
 
         # Try plain atob('...') without XOR (simpler obfuscation)
         for m in self.ATOB_PATTERN.finditer(content):
             try:
                 raw = base64.b64decode(m.group(1)).decode("utf-8", errors="ignore")
-                if len(raw) > 10 and raw.isprintable():
-                    if raw not in decoded_parts:
-                        decoded_parts.append(raw)
-                        techniques.append("js_atob")
+                if len(raw) > 10 and raw.isprintable() and raw not in decoded_parts:
+                    decoded_parts.append(raw)
+                    techniques.append("js_atob")
             except Exception:
                 continue
 
@@ -813,12 +812,10 @@ class JSDeobfuscator:
             if len(lit) % 2 == 0 and all(
                 c in "0123456789abcdefABCDEF" for c in lit
             ):
-                try:
+                with contextlib.suppress(Exception):
                     fragments.append(
                         bytes.fromhex(lit).decode("utf-8", errors="replace"),
                     )
-                except Exception:
-                    pass
                 continue
             # Long base64 → try decoding; accept only if printable-ish.
             if (

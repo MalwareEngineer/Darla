@@ -20,12 +20,12 @@ Dedup strategy:
 import logging
 import uuid
 from pathlib import Path
-from urllib.parse import urlparse
 
 from sqlalchemy import func, or_
 
 from darla.analysis.browser_downloader import browser_download
-from darla.analysis.hasher import compute_hashes as do_hash, compute_tlsh_distance
+from darla.analysis.hasher import compute_hashes as do_hash
+from darla.analysis.hasher import compute_tlsh_distance
 from darla.celery_app import celery_app
 from darla.config import get_settings
 from darla.database import get_sync_db
@@ -546,7 +546,8 @@ def browser_download_kit(
         # in the wild on volgograd-consalting / digitaltrustlayer kits.
         # Both the redirect_uri and the original lure URL can carry it.
         if final_url:
-            from urllib.parse import urlparse, unquote
+            from urllib.parse import unquote, urlparse
+
             from darla.models.indicator import Indicator, IndicatorType
             from darla.models.victim import VictimObservationSource
             from darla.services.victim_service import observe_victim_email
@@ -860,7 +861,10 @@ def render_artifact(self, kit_id: str) -> dict:
             return {"kit_id": kit_id, "rendered": 0, "error": "file_missing"}
 
         from darla.analysis.artifact_renderer import (
-            classify_artifact, render_artifact as do_render,
+            classify_artifact,
+        )
+        from darla.analysis.artifact_renderer import (
+            render_artifact as do_render,
         )
 
         fmt = classify_artifact(local)
@@ -1090,7 +1094,8 @@ def execute_svgs_active(self, prev_result: dict) -> dict:
             return {**prev_result, "svg_active_skipped": "max_depth"}
 
         from darla.analysis.browser_svg_runner import (
-            derive_dawa_from_email, execute_svg_with_capture,
+            derive_dawa_from_email,
+            execute_svg_with_capture,
         )
         from darla.models.analysis_result import AnalysisType
         from darla.tasks.analysis import upsert_analysis_result

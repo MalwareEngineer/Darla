@@ -31,8 +31,6 @@ from darla.analysis.patterns import (
     JS_CONCAT_BOUNDARY,
     JS_FALSE_DOMAINS,
     ORIGIN_BENIGN,
-    ORIGIN_LURE,
-    ORIGIN_UNKNOWN,
     PHONE_PATTERN,
     PHP_MAIL_PATTERN,
     PHP_MAIL_TO_PATTERN,
@@ -479,9 +477,11 @@ class IOCExtractor:
                     continue
                 if is_benign_url(url.replace("wss://", "https://").replace("ws://", "http://")):
                     continue
-                if self._source_root_domain:
-                    if extract_root_domain(_ws_host_lower) == self._source_root_domain:
-                        continue
+                if (
+                    self._source_root_domain
+                    and extract_root_domain(_ws_host_lower) == self._source_root_domain
+                ):
+                    continue
             except Exception:
                 continue
             websocket_hosts.add(_ws_host.lower())

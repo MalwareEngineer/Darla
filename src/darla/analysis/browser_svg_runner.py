@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import contextlib
 import json
 import logging
 import re
@@ -84,10 +85,7 @@ def _is_suppressed_terminal(url: str) -> bool:
         for suffix in _SUPPRESS_TERMINAL_HOSTS:
             if host == suffix or host.endswith("." + suffix):
                 return True
-    for sub in _SUPPRESS_TERMINAL_URL_SUBSTRINGS:
-        if sub in url:
-            return True
-    return False
+    return any(sub in url for sub in _SUPPRESS_TERMINAL_URL_SUBSTRINGS)
 
 # Content-type prefixes worth saving the body of. JS and JSON responses are
 # useful for downstream deobfuscation; landing HTML is already captured by
@@ -263,15 +261,11 @@ async def _execute_svg_async(
     # Write the wrapper to a temp file. ``file://`` URLs let Camoufox navigate
     # to an offline document, and the init_script still runs before inline
     # SVG scripts — which matters for the ``window.dawa`` override.
-    tmp = tempfile.NamedTemporaryFile(
+    with tempfile.NamedTemporaryFile(
         mode="w", suffix=".html", encoding="utf-8", delete=False,
-    )
-    try:
+    ) as tmp:
         tmp.write(wrapper)
-        tmp.flush()
         tmp_path = Path(tmp.name)
-    finally:
-        tmp.close()
 
     # Network capture state
     network_log: list[dict] = []
@@ -365,10 +359,8 @@ async def _execute_svg_async(
 
             # Popups — record the target URL but don't actually follow.
             async def _on_popup(popup):
-                try:
+                with contextlib.suppress(Exception):
                     navigations.append(popup.url)
-                except Exception:
-                    pass
             page.on("popup", _on_popup)
 
             try:
@@ -381,13 +373,11 @@ async def _execute_svg_async(
             # Let inline SVG scripts run, atob layers peel, and outbound
             # fetches fire. ``networkidle`` would block indefinitely if the
             # loader keeps polling, so we settle on a wall-clock timeout.
-            try:
+            with contextlib.suppress(TimeoutError, Exception):
                 await asyncio.wait_for(
                     page.wait_for_load_state("networkidle"),
                     timeout=min(timeout, 15),
                 )
-            except (asyncio.TimeoutError, Exception):
-                pass
             await asyncio.sleep(_DEFAULT_SETTLE_SEC)
 
             # Snapshot the final DOM — useful when the loader rewrote
@@ -413,10 +403,8 @@ async def _execute_svg_async(
         result.error = str(e)
         logger.exception("SVG active execution failed for %s", svg_path)
     finally:
-        try:
+        with contextlib.suppress(Exception):
             tmp_path.unlink(missing_ok=True)
-        except Exception:
-            pass
 
     # -----------------------------------------------------------------
     # Post-process captured network into the result

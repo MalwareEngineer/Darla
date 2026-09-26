@@ -187,8 +187,8 @@ class EMLParser:
                             # Re-emit with CRLF (wire-format) so the saved
                             # .eml can be re-parsed as an independent artifact
                             # by strict parsers.
-                            from io import BytesIO
                             from email.generator import BytesGenerator
+                            from io import BytesIO
                             buf = BytesIO()
                             BytesGenerator(
                                 buf,

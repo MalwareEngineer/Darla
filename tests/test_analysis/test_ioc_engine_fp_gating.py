@@ -22,7 +22,6 @@ from darla.analysis.patterns import (
 )
 from darla.models.indicator import IndicatorType
 
-
 # ---- Origin classification ------------------------------------------------
 
 

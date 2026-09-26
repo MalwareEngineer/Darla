@@ -35,7 +35,6 @@ from sqlalchemy.orm import Mapped, mapped_column
 
 from darla.models.base import Base, UUIDPrimaryKeyMixin
 
-
 # JSONB in Postgres (operator support, GIN indexes); JSON on SQLite so
 # in-memory unit tests against this schema can use ``create_all`` without
 # pulling in a Postgres dependency.  Production always sees JSONB; the

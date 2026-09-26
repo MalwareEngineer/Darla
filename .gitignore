@@ -21,6 +21,8 @@ env/
 
 # Environment
 .env
+.env.*
+!.env.example
 
 # OS
 .DS_Store
@@ -55,6 +57,11 @@ rabbitmqdata/
 
 # Private operational data — loaded at runtime, never committed
 private/
+# Tenant data for `darla-admin ... reload` — lives in the private deployment
+# repo / mounted at runtime (RFC 0001 §14, CONTRIBUTING.md)
+monitored_domains.yaml
+monitored_domains.yml
+victims*.csv
 
 # YARA signatures — t4d is third-party, custom rules are tracked
 rules/t4d/

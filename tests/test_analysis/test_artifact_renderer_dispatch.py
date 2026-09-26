@@ -9,16 +9,15 @@ error paths that must never raise.
 from pathlib import Path
 
 from darla.analysis.artifact_renderer import (
+    _MAX_INPUT_BYTES,
     DOCX_EXTS,
     EML_EXTS,
     PDF_EXTS,
     SVG_EXTS,
-    _MAX_INPUT_BYTES,
     _sanitize_email_html,
     classify_artifact,
     render_artifact,
 )
-
 
 # ---- classify_artifact ---------------------------------------------------
 

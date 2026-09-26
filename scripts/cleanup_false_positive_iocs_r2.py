@@ -19,7 +19,6 @@ from sqlalchemy import text
 
 from darla.database import get_sync_db
 
-
 # ---- C2 URL false positives ----
 
 # New benign service domains missed in round 1
@@ -227,7 +226,7 @@ def main():
         totals = {}
         for t in ("C2_URL", "DOMAIN", "EMAIL"):
             totals[t] = db.execute(
-                text(f"SELECT count(*) FROM indicators WHERE type = :t"),
+                text("SELECT count(*) FROM indicators WHERE type = :t"),
                 {"t": t},
             ).scalar()
 
@@ -296,7 +295,7 @@ def main():
         # New totals
         for t in ("C2_URL", "DOMAIN", "EMAIL"):
             new = db.execute(
-                text(f"SELECT count(*) FROM indicators WHERE type = :t"),
+                text("SELECT count(*) FROM indicators WHERE type = :t"),
                 {"t": t},
             ).scalar()
             print(f"  {t}: {totals[t]:,} -> {new:,}")

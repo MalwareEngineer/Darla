@@ -6,14 +6,11 @@ and IOC emission in parse_eml.
 
 from pathlib import Path
 
-import pytest
-
 from darla.analysis.svg_inspector import (
     extract_inline_script_bodies,
     inspect_bytes,
     inspect_file,
 )
-
 
 # ---- Baseline: benign / passive SVG ---------------------------------------
 
@@ -125,7 +122,7 @@ def test_use_external_href_captured():
 # ---- Obfuscation markers -------------------------------------------------
 
 
-def test_fromCharCode_obfuscation_marker():
+def test_fromCharCode_obfuscation_marker():  # noqa: N802 — JS API name
     svg = b"""<svg xmlns="http://www.w3.org/2000/svg"><script>
         var s = String.fromCharCode(104,116,116,112,115);
     </script></svg>"""

@@ -22,7 +22,6 @@ from darla.analysis.oauth_ioc import (
     is_oauth_authorize_url,
 )
 
-
 # ---------------------------------------------------------------------------
 # is_oauth_authorize_url — host/path gating
 # ---------------------------------------------------------------------------

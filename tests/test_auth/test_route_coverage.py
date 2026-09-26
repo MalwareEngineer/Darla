@@ -126,7 +126,7 @@ def test_writes_require_analyst_role():
 
     # Expected ANALYST-gated routes — keep alphabetised within each
     # method for ease of review.
-    EXPECTED_ANALYST_WRITES: set[tuple[str, str]] = {
+    expected_analyst_writes: set[tuple[str, str]] = {
         ("DELETE", "/api/v1/actors/{actor_id}"),
         ("DELETE", "/api/v1/campaigns/{campaign_id}"),
         ("DELETE", "/api/v1/families/{family_id}"),
@@ -184,8 +184,8 @@ def test_writes_require_analyst_role():
             for m in route.methods or {"GET"}:
                 actual_analyst_gated.add((m, route.path))
 
-    missing = EXPECTED_ANALYST_WRITES - actual_analyst_gated
-    unexpected = actual_analyst_gated - EXPECTED_ANALYST_WRITES
+    missing = expected_analyst_writes - actual_analyst_gated
+    unexpected = actual_analyst_gated - expected_analyst_writes
 
     # Reference require_role to keep the import live for static-analysis
     # tools that flag "imported but unused"; the actual detection works
@@ -193,11 +193,11 @@ def test_writes_require_analyst_role():
     _ = require_role
 
     assert not missing, (
-        f"These routes are expected to require ANALYST but don't:\n"
+        "These routes are expected to require ANALYST but don't:\n"
         + "\n".join(f"  {m} {p}" for m, p in sorted(missing))
     )
     assert not unexpected, (
-        f"These routes are ANALYST-gated but not in the EXPECTED list "
-        f"— add them to the test if intentional:\n"
+        "These routes are ANALYST-gated but not in the EXPECTED list "
+        "— add them to the test if intentional:\n"
         + "\n".join(f"  {m} {p}" for m, p in sorted(unexpected))
     )

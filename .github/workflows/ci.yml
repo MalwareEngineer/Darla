@@ -1,0 +1,82 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  backend:
+    name: Backend (ruff + pytest)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          # Match the Dockerfile base image.
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+
+      - name: Install
+        # yara runs the playground tests that skip on hosts without
+        # yara-python; qr/browser/render need system libs and have no
+        # unit tests that import them.
+        # ruff pinned so a new release can't fail unrelated PRs; bump deliberately.
+        run: pip install -e ".[dev,tlsh,yara]" "ruff==0.15.5"
+
+      - name: Ruff
+        run: ruff check .
+
+      - name: Pytest
+        # Includes the default-deny route-gating lint
+        # (tests/test_auth/test_route_coverage.py) and the compose
+        # network-exposure pins (tests/test_auth/test_compose_exposure.py).
+        run: pytest -q
+
+  frontend:
+    name: Frontend (eslint + build + audit)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - run: npm ci
+
+      - name: ESLint
+        run: npx eslint .
+
+      - name: Type check + build
+        run: npm run build
+
+      - name: Audit production dependencies
+        run: npm audit --omit=dev --audit-level=high
+
+  secrets:
+    name: Secret scan (gitleaks)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # gitleaks scans the commit range of the push / pull request.
+          fetch-depth: 0
+
+      - uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

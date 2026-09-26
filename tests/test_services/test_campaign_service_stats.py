@@ -14,9 +14,8 @@ from __future__ import annotations
 
 import inspect
 
-from darla.services import campaign_service
 from darla.schemas.campaign import CampaignStats
-
+from darla.services import campaign_service
 
 # ---------------------------------------------------------------------------
 # get_stats — the Overview-tab payload

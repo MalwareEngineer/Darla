@@ -13,9 +13,8 @@ from __future__ import annotations
 
 import inspect
 
-from darla.services import family_service
 from darla.schemas.family import FamilyStats
-
+from darla.services import family_service
 
 # ---------------------------------------------------------------------------
 # get_stats — the Overview-tab payload

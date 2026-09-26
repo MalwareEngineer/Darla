@@ -29,16 +29,15 @@ from darla.analysis.phishmatch import (
     DEFAULT_WEIGHTS,
     IOC_TYPE_WEIGHTS,
     MIN_SURFACE_SCORE,
-    PhishMatchScorer,
-    SignalBreakdown,
     TLSH_MAX_DISTANCE,
     TLSH_NEAR_THRESHOLD,
+    PhishMatchScorer,
+    SignalBreakdown,
     _index_indicators,
     _registered_domain,
     _url_host,
 )
 from darla.models.indicator import IndicatorType
-
 
 # ---------------------------------------------------------------------------
 # Lightweight stand-ins — no SQLAlchemy session required.

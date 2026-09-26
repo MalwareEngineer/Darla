@@ -94,7 +94,6 @@ class IndicatorService:
     ) -> list:
         """Return distinct actors linked to any kit in the same tree."""
         from darla.models.actor import Actor
-
         from darla.models.kit import Kit
 
         # Walk up to root first

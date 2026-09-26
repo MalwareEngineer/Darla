@@ -285,7 +285,6 @@ def recover_chain_cursors(self, timeout_minutes: int = 10) -> dict:
     from celery import chain as celery_chain
 
     from darla.tasks.analysis import (
-        _post_download_steps,
         post_download_steps_from_cursor,
     )
 

@@ -30,7 +30,6 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 from darla.auth import AuditLogMiddleware, set_audit_extra
 from darla.models import AUTH_MODE_DISABLED, AUTH_MODE_OIDC, AuditLog, Base
 
-
 # ---------------------------------------------------------------------------
 # Async SQLite harness — fresh DB per test, patched into the audit module.
 # ---------------------------------------------------------------------------

@@ -17,7 +17,6 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import httpx
 import pytest
 
-from darla.auth import jwks as jwks_module
 from darla.auth.jwks import JWKSError, _reset_cache_for_tests, get_signing_key
 
 
@@ -140,31 +139,36 @@ class TestColdStart:
 class TestErrorSurfaces:
     @pytest.mark.asyncio
     async def test_discovery_http_error_wraps(self, settings_via_discovery) -> None:
-        with _patch_httpx_get(httpx.ConnectError("idp down")):
-            with pytest.raises(JWKSError, match="OIDC discovery failed"):
-                await get_signing_key("key-1")
+        with (
+            _patch_httpx_get(httpx.ConnectError("idp down")),
+            pytest.raises(JWKSError, match="OIDC discovery failed"),
+        ):
+            await get_signing_key("key-1")
 
     @pytest.mark.asyncio
     async def test_discovery_missing_jwks_uri_raises(self, settings_via_discovery) -> None:
         # A discovery doc without jwks_uri is malformed — give the
         # operator a clear error rather than a confusing AttributeError.
         responses = [_httpx_response({"issuer": "https://issuer.example.com"})]
-        with _patch_httpx_get(responses):
-            with pytest.raises(JWKSError, match="missing jwks_uri"):
-                await get_signing_key("key-1")
+        with (
+            _patch_httpx_get(responses),
+            pytest.raises(JWKSError, match="missing jwks_uri"),
+        ):
+            await get_signing_key("key-1")
 
     @pytest.mark.asyncio
     async def test_jwks_fetch_http_error_wraps(self, settings_pinned_jwks) -> None:
-        with _patch_httpx_get(httpx.ConnectError("jwks down")):
-            with pytest.raises(JWKSError, match="JWKS fetch failed"):
-                await get_signing_key("key-1")
+        with (
+            _patch_httpx_get(httpx.ConnectError("jwks down")),
+            pytest.raises(JWKSError, match="JWKS fetch failed"),
+        ):
+            await get_signing_key("key-1")
 
     @pytest.mark.asyncio
     async def test_empty_keys_array_raises(self, settings_pinned_jwks) -> None:
         responses = [_httpx_response({"keys": []})]
-        with _patch_httpx_get(responses):
-            with pytest.raises(JWKSError, match="no keys"):
-                await get_signing_key("key-1")
+        with _patch_httpx_get(responses), pytest.raises(JWKSError, match="no keys"):
+            await get_signing_key("key-1")
 
     @pytest.mark.asyncio
     async def test_keys_without_kid_filtered(self, settings_pinned_jwks) -> None:
@@ -173,9 +177,11 @@ class TestErrorSurfaces:
         responses = [_httpx_response({"keys": [
             {"kty": "RSA", "n": "abc"},  # no kid
         ]})]
-        with _patch_httpx_get(responses):
-            with pytest.raises(JWKSError, match="no usable kid-keyed keys"):
-                await get_signing_key("key-1")
+        with (
+            _patch_httpx_get(responses),
+            pytest.raises(JWKSError, match="no usable kid-keyed keys"),
+        ):
+            await get_signing_key("key-1")
 
 
 # ---------------------------------------------------------------------------
@@ -215,6 +221,8 @@ class TestRotationResilience:
                 {"kid": "real-key", "kty": "RSA", "n": "abc", "e": "AQAB"},
             ]}),
         ]
-        with _patch_httpx_get(responses):
-            with pytest.raises(JWKSError, match="not found in JWKS"):
-                await get_signing_key("forged-key")
+        with (
+            _patch_httpx_get(responses),
+            pytest.raises(JWKSError, match="not found in JWKS"),
+        ):
+            await get_signing_key("forged-key")

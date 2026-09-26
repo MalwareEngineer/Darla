@@ -22,6 +22,7 @@ Requires the optional ``browser`` dependency group::
 """
 
 import asyncio
+import contextlib
 import json
 import logging
 import random
@@ -414,11 +415,9 @@ def _should_capture_body(content_type: str) -> bool:
     # Skip binary resources
     if any(ct.startswith(skip) for skip in _SKIP_CONTENT_TYPES):
         return False
-    # Capture text-based resources
-    if any(cap in ct for cap in _CAPTURABLE_CONTENT_TYPES):
-        return True
-    # Unknown content type — skip to be safe (avoid saving binary blobs)
-    return False
+    # Capture text-based resources.  Unknown content type — skip to be
+    # safe (avoid saving binary blobs).
+    return any(cap in ct for cap in _CAPTURABLE_CONTENT_TYPES)
 
 
 _SPOOFED_RESIDENTIAL_IP = {
@@ -644,7 +643,7 @@ async def _async_browser_download(
                 logger.debug("ws framereceived capture failed: %s", _e)
 
         def _on_close():
-            try:
+            with contextlib.suppress(Exception):
                 ws_frames.append({
                     "ws_url": ws_url,
                     "direction": "close",
@@ -653,8 +652,6 @@ async def _async_browser_download(
                         3,
                     ),
                 })
-            except Exception:
-                pass
 
         try:
             ws.on("framesent", _on_sent)
@@ -793,13 +790,11 @@ async def _async_browser_download(
             # Use asyncio.wait_for to enforce a hard deadline — Playwright's
             # wait_for_load_state("networkidle") can hang indefinitely when
             # Turnstile/CAPTCHA scripts keep polling.
-            try:
+            with contextlib.suppress(TimeoutError, Exception):
                 await asyncio.wait_for(
                     page.wait_for_load_state("networkidle"),
                     timeout=15,
                 )
-            except (asyncio.TimeoutError, Exception):
-                pass
 
             # Give anti-analysis JS time to run its scoring
             await asyncio.sleep(random.uniform(2.0, 4.0))
@@ -826,13 +821,11 @@ async def _async_browser_download(
                     await _take_screenshot(page, screenshots_dir, "02c_lure_cta")
 
             # Wait for final content to settle
-            try:
+            with contextlib.suppress(TimeoutError, Exception):
                 await asyncio.wait_for(
                     page.wait_for_load_state("networkidle"),
                     timeout=15,
                 )
-            except (asyncio.TimeoutError, Exception):
-                pass
 
             # Extra settle time for SPAs that render after networkidle
             # (e.g. MS login page clones loading SVG backgrounds).
@@ -863,13 +856,11 @@ async def _async_browser_download(
                                 len(snapshot), len(current),
                             )
                             # Let post-rewrite resources settle
-                            try:
+                            with contextlib.suppress(TimeoutError, Exception):
                                 await asyncio.wait_for(
                                     page.wait_for_load_state("networkidle"),
                                     timeout=10,
                                 )
-                            except (asyncio.TimeoutError, Exception):
-                                pass
                             await asyncio.sleep(random.uniform(1.0, 2.0))
                             break
 
@@ -1184,13 +1175,11 @@ async def _turnstile_solved(page) -> bool:
 async def _wait_after_turnstile(page) -> None:
     """Wait for post-Turnstile navigation or content swap."""
     await asyncio.sleep(random.uniform(2.0, 4.0))
-    try:
+    with contextlib.suppress(TimeoutError, Exception):
         await asyncio.wait_for(
             page.wait_for_load_state("networkidle"),
             timeout=10,
         )
-    except (asyncio.TimeoutError, Exception):
-        pass
 
 
 async def _simulate_human_behavior(page) -> None:
@@ -1298,7 +1287,7 @@ async def _click_lure_cta(page) -> bool:
 
         # Strip target="_blank" so the click navigates in the same tab
         # instead of opening a new tab that Playwright won't follow.
-        try:
+        with contextlib.suppress(Exception):
             await page.evaluate("""
                 (sel) => {
                     const el = document.querySelector(sel);
@@ -1313,8 +1302,6 @@ async def _click_lure_cta(page) -> bool:
                     }
                 }
             """, cta["selector"])
-        except Exception:
-            pass
 
         # Click
         try:
@@ -1327,13 +1314,11 @@ async def _click_lure_cta(page) -> bool:
             await page.mouse.click(target_x, target_y)
 
         # Wait for post-click navigation or content change
-        try:
+        with contextlib.suppress(TimeoutError, Exception):
             await asyncio.wait_for(
                 page.wait_for_load_state("networkidle"),
                 timeout=10,
             )
-        except (asyncio.TimeoutError, Exception):
-            pass
 
         await asyncio.sleep(random.uniform(1.0, 2.0))
         logger.info("Lure CTA clicked: %r", cta["text"])
@@ -1715,15 +1700,14 @@ async def _attempt_bot_gate_bypass(page, timeout_remaining: float) -> bool:
     pre_click_url = page.url
     try:
         element = await page.query_selector(gate["selector"])
-        if not element:
-            if gate["type"] == "verify_button":
-                for candidate in await page.query_selector_all(
-                    "button, [role='button'], a"
-                ):
-                    text = (await candidate.text_content() or "").strip()
-                    if text and text.lower() == gate["text"].lower():
-                        element = candidate
-                        break
+        if not element and gate["type"] == "verify_button":
+            for candidate in await page.query_selector_all(
+                "button, [role='button'], a"
+            ):
+                text = (await candidate.text_content() or "").strip()
+                if text and text.lower() == gate["text"].lower():
+                    element = candidate
+                    break
 
         if not element:
             logger.warning("Bot gate element not found after detection")
@@ -1786,13 +1770,11 @@ async def _wait_for_gate_resolution(
                 timeout=gate_timeout * 1000,
             )
             logger.info("Bot gate navigated to %s", page.url)
-            try:
+            with contextlib.suppress(TimeoutError, Exception):
                 await asyncio.wait_for(
                     page.wait_for_load_state("networkidle"),
                     timeout=10,
                 )
-            except (asyncio.TimeoutError, Exception):
-                pass
             await asyncio.sleep(random.uniform(1.5, 3.0))
             return
         except Exception:
@@ -1857,13 +1839,11 @@ async def _wait_for_gate_resolution(
                     break
 
             if pow_passed:
-                try:
+                with contextlib.suppress(TimeoutError, Exception):
                     await asyncio.wait_for(
                         page.wait_for_load_state("networkidle"),
                         timeout=10,
                     )
-                except (asyncio.TimeoutError, Exception):
-                    pass
                 await asyncio.sleep(random.uniform(1.5, 3.0))
             else:
                 logger.warning(
@@ -1889,23 +1869,19 @@ async def _wait_for_form_submit(
 
         if page.url != pre_click_url:
             logger.info("Form POST navigated to %s", page.url)
-            try:
+            with contextlib.suppress(TimeoutError, Exception):
                 await asyncio.wait_for(
                     page.wait_for_load_state("networkidle"),
                     timeout=10,
                 )
-            except (asyncio.TimeoutError, Exception):
-                pass
             await asyncio.sleep(random.uniform(1.5, 3.0))
             return
 
-        try:
+        with contextlib.suppress(TimeoutError, Exception):
             await asyncio.wait_for(
                 page.wait_for_load_state("networkidle"),
                 timeout=form_timeout,
             )
-        except (asyncio.TimeoutError, Exception):
-            pass
 
         await asyncio.sleep(random.uniform(2.0, 4.0))
 
@@ -1952,7 +1928,7 @@ def browser_download(
         elapsed = time.monotonic() - start
         logger.info("Browser download completed in %.1fs", elapsed)
         return result
-    except asyncio.TimeoutError:
+    except TimeoutError:
         elapsed = time.monotonic() - start
         logger.error(
             "Browser download hard timeout after %.1fs (limit %ds)",

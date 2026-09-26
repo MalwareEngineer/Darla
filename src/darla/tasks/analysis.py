@@ -10,7 +10,6 @@ from urllib.parse import urlparse
 
 from celery import chain
 from celery.exceptions import SoftTimeLimitExceeded
-
 from sqlalchemy import func
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
@@ -213,10 +212,8 @@ def _record_chain_cursor(
             step_name, kit_id_str, exc,
         )
         if db is not None:
-            try:
+            with contextlib.suppress(Exception):
                 db.rollback()
-            except Exception:
-                pass
     finally:
         if db is not None:
             db.close()
@@ -564,7 +561,10 @@ def deobfuscate_files(self, prev_result: dict) -> dict:
                     files_processed += 1
 
                 # JS XOR+base64 deobfuscation — HTML/JS files with eval chains
-                if candidate.suffix.lower() in (".js", ".html", ".htm") or _looks_like_html(candidate):
+                if (
+                    candidate.suffix.lower() in (".js", ".html", ".htm")
+                    or _looks_like_html(candidate)
+                ):
                     result = js_deobfuscator.deobfuscate_file(str(candidate))
                     if result.layers_unwrapped > 0:
                         # Write decoded output as companion file (preserve original)
@@ -839,8 +839,8 @@ def extract_iocs(self, prev_result: dict) -> dict:
         # These are high-confidence because they come from actual connections,
         # not regex scraping of page content.
         # ------------------------------------------------------------------
-        from darla.models.indicator import IndicatorType
         from darla.analysis.patterns import BENIGN_URL_ROOT_DOMAINS, extract_root_domain
+        from darla.models.indicator import IndicatorType
 
         network_iocs_added = 0
         seen_values: set[str] = {ioc.value for ioc in result.iocs}
@@ -904,7 +904,11 @@ def extract_iocs(self, prev_result: dict) -> dict:
                 target_host = urlparse(resolve_target).hostname
                 if target_host:
                     ip = socket.gethostbyname(target_host)
-                    if ip and ip not in seen_values and not ip.startswith(("10.", "192.168.", "127.")):
+                    if (
+                        ip
+                        and ip not in seen_values
+                        and not ip.startswith(("10.", "192.168.", "127."))
+                    ):
                         seen_values.add(ip)
                         # Dedup against investigation
                         existing_ip = None

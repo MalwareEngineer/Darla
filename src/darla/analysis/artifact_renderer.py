@@ -15,6 +15,7 @@ browser; they go through pymupdf (PDF) or LibreOffice headless (DOCX → PDF
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import html
 import logging
 import re
@@ -241,10 +242,8 @@ def _render_eml(
     except Exception as e:
         result.errors.append(f"eml_render_error:{e}")
     finally:
-        try:
+        with contextlib.suppress(Exception):
             tmp_path.unlink(missing_ok=True)
-        except Exception:
-            pass
 
 
 # ---------------------------------------------------------------------------
@@ -284,10 +283,8 @@ min-height:100vh;background:#fff;}}svg{{max-width:100%;max-height:100vh;}}</styl
     except Exception as e:
         result.errors.append(f"svg_render_error:{e}")
     finally:
-        try:
+        with contextlib.suppress(Exception):
             tmp_path.unlink(missing_ok=True)
-        except Exception:
-            pass
 
 
 # ---------------------------------------------------------------------------
@@ -375,7 +372,7 @@ def _render_docx(docx_path: Path, out_dir: Path, result: RenderResult) -> None:
 
         # Relabel so it's clear the source was DOCX, not a native PDF.
         for i, (f, _) in enumerate(
-            zip(pdf_result.rendered_files, pdf_result.stage_labels)
+            zip(pdf_result.rendered_files, pdf_result.stage_labels, strict=False)
         ):
             renamed = out_dir / f"00_docx_p{i + 1:02d}.png"
             try:
@@ -464,17 +461,13 @@ async def _async_camoufox_screenshot_file(
         page.set_default_timeout(timeout * 1000)
         page.set_default_navigation_timeout(timeout * 1000)
 
-        try:
+        # Even on navigation timeout, try to capture whatever painted.
+        with contextlib.suppress(Exception):
             await page.goto(file_url, wait_until="domcontentloaded")
-        except Exception:
-            # Even on navigation timeout, try to capture whatever painted.
-            pass
 
         # Brief settle so fonts/layout apply.
-        try:
+        with contextlib.suppress(Exception):
             await page.wait_for_timeout(500)
-        except Exception:
-            pass
 
         await page.screenshot(path=str(out_file), full_page=True)
         await context.close()

@@ -4,7 +4,6 @@ from pathlib import Path
 
 from darla.analysis.eml_parser import EMLParser, NestedEML, _safe_attachment_name
 
-
 # ---- Filename sanitization ----------------------------------------------
 
 

@@ -15,7 +15,6 @@ from pathlib import Path
 
 import pytest
 
-from darla.analysis import browser_svg_runner as bsr
 from darla.analysis.browser_svg_runner import (
     SVGExecResult,
     _build_wrapper_html,
@@ -25,7 +24,6 @@ from darla.analysis.browser_svg_runner import (
     derive_dawa_from_email,
     execute_svg_with_capture,
 )
-
 
 # ---------------------------------------------------------------------------
 # derive_dawa_from_email
