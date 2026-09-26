@@ -94,6 +94,8 @@ def build_analysis_chain(kit_id: str, force: bool = False) -> chain:
     if force:
         # Inject force flag into the chain so compute_hashes skips SHA256 dedup
         steps = [_inject_force.s(), *steps]
+        # ...and so download_kit skips its browser-render redundancy check
+        return chain(download_kit.s(kit_id, force=True), *steps)
     return chain(download_kit.s(kit_id), *steps)
 
 
@@ -277,12 +279,12 @@ def compute_hashes(self, prev_result: dict) -> dict:
         # yet promoted) is treated as the same "investigation" so feed
         # dedup behavior is preserved — two identical feed arrivals
         # collapse to one.
-        _EMPTY_SHA256 = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-        if not prev_result.get("force") and result.sha256 != _EMPTY_SHA256:
-            existing = db.query(Kit).filter(
-                Kit.sha256 == result.sha256,
-                Kit.id != kit.id,
-            ).first()
+        from darla.tasks.browser import EMPTY_SHA256, find_sha256_match
+
+        if not prev_result.get("force") and result.sha256 != EMPTY_SHA256:
+            existing = find_sha256_match(
+                db, result.sha256, kit.id, kit.investigation_id,
+            )
 
             if existing:
                 same_investigation = (
@@ -1619,12 +1621,22 @@ def finalize_kit(self, prev_result: dict) -> dict:
             if is_thin and is_html_like and not has_browser_child and not at_depth_limit:
                 from darla.tasks.browser import (
                     browser_download_kit,
+                    find_redundant_render_reason,
                     precreate_browser_render_child_kit,
                 )
 
-                child, skip_reason = precreate_browser_render_child_kit(
-                    db, kit,
-                )
+                # Same redundancy rule download_kit applied to Tier A —
+                # a skipped redirect child is usually a thin JS loader,
+                # so without this Tier B would re-dispatch the render.
+                redundant = prev_result.get(
+                    "browser_render_skipped",
+                ) or find_redundant_render_reason(db, kit, None)
+                if redundant:
+                    child, skip_reason = None, redundant
+                else:
+                    child, skip_reason = precreate_browser_render_child_kit(
+                        db, kit,
+                    )
                 if child is not None:
                     db.commit()
                     browser_download_kit.apply_async(
