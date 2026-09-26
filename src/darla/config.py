@@ -129,9 +129,13 @@ class Settings(BaseSettings):
     # string) causes the guardrails to refuse startup.
     i_understand_auth_is_off: str = ""
 
-    # uvicorn host.  Guardrails refuse anything but ``127.0.0.1`` /
-    # ``localhost`` when ``auth_enabled=False`` — disabled-mode
-    # deployments must not be network-reachable.
+    # Host address the API is published on.  Under Docker Compose this
+    # is the host side of the ``api`` port mapping
+    # (``${PK_BIND_ADDRESS}:8000:8000``) and compose passes the same
+    # interpolated value into the container, so the guardrail checks
+    # exactly what Docker bound.  Guardrails refuse anything but
+    # ``127.0.0.1`` / ``localhost`` / ``::1`` when ``auth_enabled=False``
+    # — disabled-mode deployments must not be network-reachable.
     bind_address: str = "127.0.0.1"
 
     # OIDC issuer URL — only consulted when auth is enabled.  Used both
@@ -161,6 +165,15 @@ class Settings(BaseSettings):
     # regardless of TTL, so legitimate rotations resolve within one
     # rejected request.
     oidc_jwks_cache_ttl: int = 3600
+
+    # JWT signature algorithms the API accepts.  The allowlist is
+    # server-side on purpose: taking the algorithm from the token's own
+    # header is the classic alg-confusion hole (``HS256`` signed with
+    # the public key, or ``none``).  Guardrails refuse any symmetric or
+    # ``none`` entry at startup.  Entra/Okta/Auth0 sign RS256; add e.g.
+    # ``PS256`` / ``ES256`` for a Keycloak realm configured that way.
+    # Env format is JSON: ``PK_OIDC_ALLOWED_ALGORITHMS=["RS256","ES256"]``.
+    oidc_allowed_algorithms: list[str] = ["RS256"]
 
     # JSON path inside the JWT to find the user's stable subject.
     # OIDC standard is ``sub``.  Entra deployments override to ``oid``

@@ -8,8 +8,11 @@ services:
       POSTGRES_DB: darla
       POSTGRES_USER: ${POSTGRES_USER}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    # Infra ports are for host-side dev tools only (psql, redis-cli,
+    # the RabbitMQ UI) — never published beyond loopback.  Containers
+    # reach each other over the compose network, not these ports.
     ports:
-      - "5432:5432"
+      - "127.0.0.1:5432:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
@@ -22,7 +25,7 @@ services:
     image: redis:7-alpine
     container_name: darla-redis
     ports:
-      - "6379:6379"
+      - "127.0.0.1:6379:6379"
     volumes:
       - redisdata:/data
     healthcheck:
@@ -41,8 +44,8 @@ services:
       RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER}
       RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASS}
     ports:
-      - "5672:5672"
-      - "15672:15672"
+      - "127.0.0.1:5672:5672"
+      - "127.0.0.1:15672:15672"
     volumes:
       - rabbitmqdata:/var/lib/rabbitmq
     healthcheck:
@@ -54,10 +57,17 @@ services:
   api:
     build: .
     container_name: darla-api
+    # uvicorn must listen on 0.0.0.0 *inside* the container for Docker
+    # port publishing to work; host exposure is decided by the ports
+    # mapping below, from PK_BIND_ADDRESS.
     command: >
       uvicorn darla.main:app
       --host 0.0.0.0 --port 8000
     environment:
+      # Same interpolated value as the ports mapping, so the startup
+      # guardrail (auth/guardrails.py) checks exactly what Docker bound
+      # — even if a shell export overrides .env.
+      PK_BIND_ADDRESS: ${PK_BIND_ADDRESS:-127.0.0.1}
       PK_DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/darla
       PK_SYNC_DATABASE_URL: postgresql+psycopg2://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/darla
       PK_CELERY_BROKER_URL: amqp://${RABBITMQ_USER}:${RABBITMQ_PASS}@rabbitmq:5672//
@@ -68,7 +78,7 @@ services:
     env_file:
       - .env
     ports:
-      - "8000:8000"
+      - "${PK_BIND_ADDRESS:-127.0.0.1}:8000:8000"
     volumes:
       - downloads:/app/downloads
       - extracted:/app/extracted:ro

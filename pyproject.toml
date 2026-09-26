@@ -18,7 +18,6 @@ dependencies = [
     "celery[redis]>=5.4.0",
     "redis>=5.2.0",
     "httpx>=0.28.0",
-    "certstream>=1.12",
     "pydantic>=2.10.0",
     "pydantic-settings>=2.6.0",
     "typer[all]>=0.15.0",
@@ -29,10 +28,11 @@ dependencies = [
     "python-Levenshtein>=0.26.0",
     "cryptography>=43.0.0",
     "brotli>=1.1.0",
-    # JWT validation for OIDC bearer tokens (RFC 0001).  python-jose
-    # rather than authlib because we only need the offline JWT verifier
-    # — the [cryptography] extra pulls the RS256/ES256 backends.
-    "python-jose[cryptography]>=3.3.0",
+    # JWT validation for OIDC bearer tokens (RFC 0001).  PyJWT rather
+    # than python-jose (sparsely maintained, CVE-2024-33663/33664) or
+    # authlib (we only need the offline verifier) — the [crypto] extra
+    # pulls the RS/PS/ES/EdDSA backends.
+    "PyJWT[crypto]>=2.10.0",
     # YAML parser for the `darla-admin monitored-domain reload`
     # command (RFC §9).  Already a transitive dep of other libs but
     # we depend on it directly here so it can't disappear under us.

@@ -22,8 +22,13 @@ The startup-time controls are:
 
 1. **Required ack token** — ``PK_I_UNDERSTAND_AUTH_IS_OFF`` must equal
    the verbose constant string :const:`AUTH_OFF_ACK`.
-2. **Localhost-only bind** — ``PK_BIND_ADDRESS`` must be ``127.0.0.1``
-   or ``localhost``.
+2. **Localhost-only bind** — ``PK_BIND_ADDRESS`` must be ``127.0.0.1``,
+   ``localhost`` or ``::1``.  This only means something because
+   ``docker-compose.yml`` publishes the API on ``${PK_BIND_ADDRESS}``
+   and injects that same value into the container; uvicorn itself
+   listens on ``0.0.0.0`` *inside* the container network namespace,
+   which is required for Docker port publishing to work at all.
+   ``tests/test_auth/test_compose_exposure.py`` pins that wiring.
 3. **No AWS IMDS** — refuse to start if the EC2 instance metadata
    service responds (i.e. we're on AWS).
 4. **Debug mode required** — ``PK_DEBUG`` must be ``True``.
@@ -49,6 +54,16 @@ AUTH_OFF_ACK = "yes-only-for-local-eval"
 # explicitly NOT here — that's the prod default and the most common
 # way someone exposes a "dev" container to the network by accident.
 _LOCALHOST_VALUES = frozenset({"127.0.0.1", "localhost", "::1"})
+
+# JWT algorithms an OIDC IdP can legitimately sign with (JWKS publishes
+# public keys, so only asymmetric schemes make sense).  Validated
+# against ``PK_OIDC_ALLOWED_ALGORITHMS`` when auth is enabled.
+ASYMMETRIC_JWT_ALGORITHMS = frozenset({
+    "RS256", "RS384", "RS512",
+    "PS256", "PS384", "PS512",
+    "ES256", "ES384", "ES512",
+    "EdDSA",
+})
 
 # AWS instance metadata service.  IMDSv2 requires a token-fetch step,
 # but IMDSv1 plus IMDSv2 both respond on this URL — a 200 from this
@@ -95,6 +110,17 @@ def _enforce_oidc_settings_present(s: Settings) -> None:
         _die("PK_AUTH_ENABLED=true but PK_OIDC_ISSUER is empty")
     if not s.oidc_audience:
         _die("PK_AUTH_ENABLED=true but PK_OIDC_AUDIENCE is empty")
+    if not s.oidc_allowed_algorithms:
+        _die("PK_AUTH_ENABLED=true but PK_OIDC_ALLOWED_ALGORITHMS is empty")
+    bad = [a for a in s.oidc_allowed_algorithms if a not in ASYMMETRIC_JWT_ALGORITHMS]
+    if bad:
+        _die(
+            f"PK_OIDC_ALLOWED_ALGORITHMS contains {bad!r}; only asymmetric "
+            f"algorithms are accepted ({sorted(ASYMMETRIC_JWT_ALGORITHMS)}).  "
+            "An OIDC IdP signs with its private key and publishes the "
+            "public half via JWKS — an HMAC or 'none' entry would let "
+            "anyone holding the public key mint tokens.",
+        )
 
 
 def _enforce_ack_token(s: Settings) -> None:

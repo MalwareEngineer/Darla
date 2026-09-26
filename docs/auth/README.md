@@ -67,6 +67,8 @@ in for each provider.
 | `PK_OIDC_ROLE_CLAIM` | JSON path to the role(s). Default `roles`. Supports dotted paths (e.g. `realm_access.roles` for Keycloak). |
 | `PK_OIDC_VIEWER_ROLE_VALUE` | String the role claim must contain to grant viewer access. Default `Darla.Viewer`. |
 | `PK_OIDC_ANALYST_ROLE_VALUE` | String the role claim must contain to grant analyst access. Default `Darla.Analyst`. |
+| `PK_OIDC_ALLOWED_ALGORITHMS` | JSON list of accepted JWT signing algorithms. Default `["RS256"]` (Entra, Okta, Auth0). Asymmetric only — `HS*` and `none` refuse startup. Set e.g. `["RS256","ES256"]` for a Keycloak realm signing with EC keys. |
+| `PK_BIND_ADDRESS` | Host address Docker Compose publishes the API on. Default `127.0.0.1`; set `0.0.0.0` for a team deployment (auth must be on). Must be an IP when running under Compose. |
 
 Frontend has matching `VITE_AUTH_ENABLED`, `VITE_OIDC_AUTHORITY`,
 `VITE_OIDC_CLIENT_ID`, `VITE_OIDC_API_SCOPE`.
