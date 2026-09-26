@@ -1,9 +1,9 @@
 """Auth middleware — token validation, JIT user provisioning, role gates.
 
-Token-validation tests use a real RS256 keypair generated per-test so
-the middleware actually exercises ``python-jose`` end-to-end (signing,
-JWKS lookup, claim extraction).  Skipped on installs without
-``python-jose[cryptography]``.
+Token-validation tests use a real RS256 keypair generated per-module so
+the middleware actually exercises PyJWT end-to-end (signing, JWKS
+lookup, claim extraction), plus hand-forged tokens for the
+algorithm-confusion cases.
 
 Database tests use the in-memory SQLite harness consistent with
 ``tests/test_models/`` — JIT row creation, role refresh on existing
@@ -23,7 +23,8 @@ import pytest
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 from fastapi import HTTPException
-from jose import jwt
+import jwt
+from jwt.algorithms import RSAAlgorithm
 from sqlalchemy import create_engine
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import Session
@@ -96,15 +97,10 @@ def rsa_keypair():
         encryption_algorithm=serialization.NoEncryption(),
     )
 
-    # Derive a JWK from the public key — python-jose's JWK helper handles
-    # the n/e base64url encoding.
-    public_pem = private_key.public_key().public_bytes(
-        encoding=serialization.Encoding.PEM,
-        format=serialization.PublicFormat.SubjectPublicKeyInfo,
-    )
-    from jose.backends.cryptography_backend import CryptographyRSAKey
-
-    jwk_public = CryptographyRSAKey(public_pem.decode(), "RS256").to_dict()
+    # Derive a JWK from the public key — PyJWT's RSAAlgorithm handles
+    # the n/e base64url encoding.  No ``alg`` member, matching Entra's
+    # published JWKS.
+    jwk_public = RSAAlgorithm.to_jwk(private_key.public_key(), as_dict=True)
     jwk_public["kid"] = "test-key-1"
     return private_pem, jwk_public
 
@@ -181,6 +177,7 @@ def auth_settings(monkeypatch, rsa_keypair):
     monkeypatch.setattr(s, "oidc_role_claim", "roles")
     monkeypatch.setattr(s, "oidc_viewer_role_value", "Darla.Viewer")
     monkeypatch.setattr(s, "oidc_analyst_role_value", "Darla.Analyst")
+    monkeypatch.setattr(s, "oidc_allowed_algorithms", ["RS256"])
     return s
 
 
@@ -533,3 +530,153 @@ class TestDisabledAuthLoggingMiddleware:
             and r.name == "darla.auth.middleware"
             for r in caplog.records
         )
+
+
+# ---------------------------------------------------------------------------
+# Algorithm confusion — the header's ``alg`` is attacker-controlled
+# ---------------------------------------------------------------------------
+
+
+def _b64url(data: bytes) -> str:
+    import base64
+
+    return base64.urlsafe_b64encode(data).rstrip(b"=").decode()
+
+
+def _forge(alg: str, secret: bytes, *, issuer: str, audience: str) -> str:
+    """Hand-build a token with an arbitrary header ``alg``.
+
+    Library encoders refuse to HMAC-sign with an asymmetric public key
+    (that refusal is exactly the defense), so build the JWS by hand the
+    way an attacker would.
+    """
+    import hashlib
+    import hmac
+    import json
+
+    header = {"alg": alg, "kid": "test-key-1", "typ": "JWT"}
+    now = int(time.time())
+    payload = {
+        "iss": issuer, "aud": audience, "iat": now, "exp": now + 600,
+        "sub": "attacker", "roles": ["Darla.Analyst"],
+    }
+    signing_input = (
+        f"{_b64url(json.dumps(header).encode())}."
+        f"{_b64url(json.dumps(payload).encode())}"
+    )
+    if alg == "none":
+        signature = b""
+    elif not alg.startswith("HS"):
+        signature = b"\x00" * 64  # shape only; never verifies
+    else:
+        digest = {"HS256": hashlib.sha256, "HS384": hashlib.sha384,
+                  "HS512": hashlib.sha512}[alg]
+        signature = hmac.new(secret, signing_input.encode(), digest).digest()
+    return f"{signing_input}.{_b64url(signature)}"
+
+
+class TestAlgorithmConfusion:
+    """Every forged or off-allowlist token must end in a 401 — never a
+    500 (python-jose raised JWKError outside its JWTError tree, so these
+    used to escape the handler) and never a validated user."""
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("alg", ["HS256", "HS384", "HS512", "none"])
+    @pytest.mark.parametrize("secret_kind", ["jwk_json", "modulus"])
+    async def test_forged_symmetric_or_none_token_rejected(
+        self, alg, secret_kind, auth_settings, rsa_keypair, patched_jwks,
+        async_db,
+    ) -> None:
+        import json
+
+        _, jwk_public = rsa_keypair
+        secret = (
+            json.dumps(jwk_public).encode() if secret_kind == "jwk_json"
+            else jwk_public["n"].encode()
+        )
+        token = _forge(
+            alg, secret,
+            issuer=auth_settings.oidc_issuer,
+            audience=auth_settings.oidc_audience,
+        )
+        with pytest.raises(HTTPException) as exc:
+            await current_user(_make_request(token), async_db)
+        assert exc.value.status_code == 401
+        assert "not allowed" in exc.value.detail
+        # Rejected before the key was even fetched.
+        patched_jwks.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_validly_signed_but_off_allowlist_alg_rejected(
+        self, auth_settings, rsa_keypair, patched_jwks, async_db,
+    ) -> None:
+        # Genuine IdP key, genuine signature — but RS512 isn't allowlisted.
+        private_pem, _ = rsa_keypair
+        now = int(time.time())
+        token = jwt.encode(
+            {"iss": auth_settings.oidc_issuer,
+             "aud": auth_settings.oidc_audience,
+             "exp": now + 600, "sub": "s", "roles": ["Darla.Analyst"]},
+            private_pem, algorithm="RS512", headers={"kid": "test-key-1"},
+        )
+        with pytest.raises(HTTPException) as exc:
+            await current_user(_make_request(token), async_db)
+        assert exc.value.status_code == 401
+
+    @pytest.mark.asyncio
+    async def test_key_type_mismatch_is_401_not_500(
+        self, auth_settings, monkeypatch, rsa_keypair, patched_jwks,
+        async_db,
+    ) -> None:
+        # Operator allowlists ES256 but the IdP key is RSA — building the
+        # key must fail inside the PyJWTError handler.
+        monkeypatch.setattr(auth_settings, "oidc_allowed_algorithms",
+                            ["RS256", "ES256"])
+        token = _forge(
+            "ES256", b"",
+            issuer=auth_settings.oidc_issuer,
+            audience=auth_settings.oidc_audience,
+        )
+        with pytest.raises(HTTPException) as exc:
+            await current_user(_make_request(token), async_db)
+        assert exc.value.status_code == 401
+        assert exc.value.detail.startswith("Invalid token")
+
+    @pytest.mark.asyncio
+    async def test_jwk_pinned_alg_must_match_header(
+        self, auth_settings, monkeypatch, rsa_keypair, async_db,
+    ) -> None:
+        private_pem, jwk_public = rsa_keypair
+        monkeypatch.setattr(auth_settings, "oidc_allowed_algorithms",
+                            ["RS256", "PS256"])
+        pinned = {**jwk_public, "alg": "RS256"}
+        now = int(time.time())
+        token = jwt.encode(
+            {"iss": auth_settings.oidc_issuer,
+             "aud": auth_settings.oidc_audience,
+             "exp": now + 600, "sub": "s", "roles": ["Darla.Analyst"]},
+            private_pem, algorithm="PS256", headers={"kid": "test-key-1"},
+        )
+        with (
+            patch("darla.auth.middleware.get_signing_key",
+                  AsyncMock(return_value=pinned)),
+            pytest.raises(HTTPException) as exc,
+        ):
+            await current_user(_make_request(token), async_db)
+        assert exc.value.status_code == 401
+        assert "does not match signing key" in exc.value.detail
+
+    @pytest.mark.asyncio
+    async def test_token_without_exp_rejected(
+        self, auth_settings, rsa_keypair, patched_jwks, async_db,
+    ) -> None:
+        private_pem, _ = rsa_keypair
+        token = jwt.encode(
+            {"iss": auth_settings.oidc_issuer,
+             "aud": auth_settings.oidc_audience,
+             "sub": "s", "roles": ["Darla.Analyst"]},
+            private_pem, algorithm="RS256", headers={"kid": "test-key-1"},
+        )
+        with pytest.raises(HTTPException) as exc:
+            await current_user(_make_request(token), async_db)
+        assert exc.value.status_code == 401

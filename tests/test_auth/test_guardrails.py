@@ -200,3 +200,46 @@ class TestAuthEnabledMode:
         with pytest.raises(SystemExit) as exc:
             run_startup_guardrails(settings)
         assert "PK_OIDC_AUDIENCE" in str(exc.value)
+
+
+# ---------------------------------------------------------------------------
+# JWT algorithm allowlist (auth-enabled mode)
+# ---------------------------------------------------------------------------
+
+
+def _oidc_settings(**overrides) -> Settings:
+    base = dict(
+        auth_enabled=True,
+        oidc_issuer="https://issuer.example.com",
+        oidc_audience="api-client-id",
+    )
+    base.update(overrides)
+    return Settings(**base)
+
+
+class TestAllowedAlgorithms:
+    def test_default_is_rs256(self) -> None:
+        assert Settings().oidc_allowed_algorithms == ["RS256"]
+
+    @pytest.mark.parametrize("algs", [
+        ["RS256"], ["RS256", "PS256"], ["ES256", "ES384"], ["EdDSA"],
+    ])
+    def test_asymmetric_allowlists_start(self, algs) -> None:
+        run_startup_guardrails(_oidc_settings(oidc_allowed_algorithms=algs))
+
+    @pytest.mark.parametrize("bad", ["HS256", "HS512", "none", "rs256"])
+    def test_symmetric_none_or_misspelled_refuses(self, bad) -> None:
+        with pytest.raises(SystemExit) as exc:
+            run_startup_guardrails(
+                _oidc_settings(oidc_allowed_algorithms=["RS256", bad]),
+            )
+        assert "PK_OIDC_ALLOWED_ALGORITHMS" in str(exc.value)
+
+    def test_empty_allowlist_refuses(self) -> None:
+        with pytest.raises(SystemExit) as exc:
+            run_startup_guardrails(_oidc_settings(oidc_allowed_algorithms=[]))
+        assert "PK_OIDC_ALLOWED_ALGORITHMS" in str(exc.value)
+
+    def test_env_var_json_format(self, monkeypatch) -> None:
+        monkeypatch.setenv("PK_OIDC_ALLOWED_ALGORITHMS", '["RS256","ES256"]')
+        assert Settings().oidc_allowed_algorithms == ["RS256", "ES256"]
