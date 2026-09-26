@@ -123,7 +123,7 @@ function PolyBrowser() {
         offset={offset}
         limit={PAGE_SIZE}
         total={data.total}
-        onPageChange={setOffset}
+        onOffsetChange={setOffset}
       />
     </div>
   );
@@ -137,7 +137,7 @@ function AnyBrowser() {
   const { data, isLoading } = useKits({
     offset,
     limit: PAGE_SIZE,
-    status_filter: "analyzed" as any,
+    status_filter: "analyzed",
   });
 
   const filtered = data?.items.filter((kit) => {
@@ -200,7 +200,7 @@ function AnyBrowser() {
               offset={offset}
               limit={PAGE_SIZE}
               total={data.total}
-              onPageChange={setOffset}
+              onOffsetChange={setOffset}
             />
           )}
         </>

@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, useRef } from "react";
+import { useState, useMemo, useRef } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { useKits, useSubmitKit, useUploadKit, useBulkSubmitKits, useBulkUploadKits, useSearchKits, useBulkDeleteKits } from "@/hooks/use-kits";
 import { KitStatusBadge } from "@/components/shared/kit-status-badge";
@@ -63,15 +63,18 @@ export function KitsPage() {
   const [searchInput, setSearchInput] = useState(searchParams.get("search") ?? "");
   const [activeSearch, setActiveSearch] = useState(searchParams.get("search") ?? "");
 
-  // Sync from URL on first load or when navigated to with ?search=
-  useEffect(() => {
-    const urlSearch = searchParams.get("search") ?? "";
+  // Sync when navigated here with a new ?search= (first load is covered
+  // by the initializers above).  Adjust-during-render, not an effect.
+  const urlSearch = searchParams.get("search") ?? "";
+  const [prevUrlSearch, setPrevUrlSearch] = useState(urlSearch);
+  if (urlSearch !== prevUrlSearch) {
+    setPrevUrlSearch(urlSearch);
     if (urlSearch && urlSearch !== activeSearch) {
       setSearchInput(urlSearch);
       setActiveSearch(urlSearch);
       setOffset(0);
     }
-  }, [searchParams]);
+  }
 
   // Submit URL state
   const [submitOpen, setSubmitOpen] = useState(false);
@@ -96,10 +99,13 @@ export function KitsPage() {
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [deleteOpen, setDeleteOpen] = useState(false);
 
-  // Clear selection on page/filter change
-  useEffect(() => {
+  // Clear selection on page/filter change (adjust-during-render)
+  const selectionScope = `${offset}|${statusFilter}|${activeSearch}`;
+  const [prevSelectionScope, setPrevSelectionScope] = useState(selectionScope);
+  if (selectionScope !== prevSelectionScope) {
+    setPrevSelectionScope(selectionScope);
     setSelectedIds(new Set());
-  }, [offset, statusFilter, activeSearch]);
+  }
 
   const isSearching = activeSearch.trim().length > 0;
   const searchParsed = parseSearch(activeSearch);
@@ -117,7 +123,7 @@ export function KitsPage() {
 
   const data = isSearching ? searchData : listData;
   const isLoading = isSearching ? searchLoading : listLoading;
-  const items = data?.items ?? [];
+  const items = useMemo(() => data?.items ?? [], [data]);
 
   const pageIds = useMemo(() => items.map((k: KitSummary) => k.id), [items]);
   const allPageSelected = pageIds.length > 0 && pageIds.every((id: string) => selectedIds.has(id));

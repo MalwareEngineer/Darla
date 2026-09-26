@@ -1,6 +1,6 @@
 import { useMemo } from "react";
 import { CheckCircle, XCircle, Circle, Loader2, Minus } from "lucide-react";
-import type { AnalysisResultBrief, KitStatus } from "@/types/api";
+import type { AnalysisResultBrief, AnalysisType, KitStatus } from "@/types/api";
 
 interface Props {
   results: AnalysisResultBrief[];
@@ -8,7 +8,7 @@ interface Props {
 }
 
 interface PipelineStep {
-  type: string;
+  type: AnalysisType;
   label: string;
   core: boolean;
 }

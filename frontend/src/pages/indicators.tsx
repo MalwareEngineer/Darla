@@ -4,7 +4,7 @@ import { useIndicators, useIndicatorSearch, useIndicatorStats } from "@/hooks/us
 import { IocTypeBadge } from "@/components/shared/ioc-type-badge";
 import { Pagination } from "@/components/shared/pagination";
 import { TableLoading } from "@/components/shared/loading";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent } from "@/components/ui/card";
 import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from "@/components/ui/table";
@@ -12,7 +12,6 @@ import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
 import { Input } from "@/components/ui/input";
-import { Progress } from "@/components/ui/progress";
 import type { IndicatorType } from "@/types/api";
 
 const IOC_TYPES: (IndicatorType | "all")[] = [

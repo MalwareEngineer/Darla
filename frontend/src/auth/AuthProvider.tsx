@@ -25,7 +25,6 @@
  */
 
 import {
-  createContext,
   useCallback,
   useEffect,
   useMemo,
@@ -36,44 +35,8 @@ import {
 import { User, UserManager } from "oidc-client-ts";
 import { buildUserManagerSettings, readOidcEnv } from "./oidcConfig";
 import { setAccessTokenGetter } from "@/lib/auth-token";
+import { AuthContext, type AuthContextValue, type AuthUser, type Role } from "./authContext";
 
-export type Role = "viewer" | "analyst";
-
-export interface AuthUser {
-  /** Stable subject identifier from the configured subject claim. */
-  subject: string;
-  /** Display name (token's `name` claim, falls back to UPN/subject). */
-  displayName: string;
-  /** UPN / preferred_username — typically email-shaped. */
-  upn: string;
-  /** Effective role derived from the token's role claim. */
-  role: Role | null;
-}
-
-export interface AuthContextValue {
-  /** Build-time mode flag.  Stable for the life of the app. */
-  authEnabled: boolean;
-
-  /** True while the provider is determining initial state. */
-  loading: boolean;
-
-  /** Authenticated user, or `null` when not signed in / disabled mode. */
-  user: AuthUser | null;
-
-  /** Trigger a redirect-to-IdP sign-in.  No-op in disabled mode. */
-  signIn: () => Promise<void>;
-
-  /** Sign out locally and (when supported) at the IdP. */
-  signOut: () => Promise<void>;
-
-  /** Returns the current access token, or null. */
-  getAccessToken: () => string | null;
-
-  /** Last sign-in / silent-renew error, if any.  Used by AuthGate. */
-  error: Error | null;
-}
-
-export const AuthContext = createContext<AuthContextValue | null>(null);
 
 /** Wire the OIDC role claim into our two-tier role enum. */
 function pickRole(roles: string[] | undefined): Role | null {
@@ -199,7 +162,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       // Silent refresh failed — token will eventually expire and
       // requests will start 401-ing.  Surface it to AuthGate which
       // triggers a fresh sign-in redirect.
-      // eslint-disable-next-line no-console
       console.warn("[auth] silent renew failed:", e);
       setError(e);
     };
@@ -220,7 +182,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         }
       })
       .catch((e) => {
-        // eslint-disable-next-line no-console
         console.warn("[auth] getUser() failed:", e);
         setError(e instanceof Error ? e : new Error(String(e)));
       })
@@ -253,7 +214,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       // throws — fall back to local-only removal.
       await userManagerRef.current.signoutRedirect();
     } catch (e) {
-      // eslint-disable-next-line no-console
       console.warn("[auth] IdP signout failed, removing local session:", e);
       await userManagerRef.current.removeUser();
       setUser(null);
@@ -280,12 +240,4 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
-}
-
-/** Internal helper — also exported for the Callback page. */
-export function getUserManager(): UserManager | null {
-  // The Callback page renders OUTSIDE the AuthProvider's controlled
-  // routes (it's a sibling) so it constructs its own UserManager
-  // from the env.  This export exists for completeness / debugging.
-  return null;
 }

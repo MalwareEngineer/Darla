@@ -65,7 +65,7 @@ export function TabNetwork({ kitId, enabled }: Props) {
   const [typeFilter, setTypeFilter] = useState("all");
   const [expandedRow, setExpandedRow] = useState<number | null>(null);
 
-  const events = data?.events ?? [];
+  const events = useMemo(() => data?.events ?? [], [data]);
 
   // Pair requests with responses by URL
   const paired = useMemo(() => {

@@ -11,7 +11,7 @@
  * loud failure rather than a silent null.
  */
 import { useContext } from "react";
-import { AuthContext, type AuthContextValue } from "./AuthProvider";
+import { AuthContext, type AuthContextValue } from "./authContext";
 
 export function useAuth(): AuthContextValue {
   const ctx = useContext(AuthContext);
