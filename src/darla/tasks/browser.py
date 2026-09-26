@@ -22,7 +22,7 @@ import uuid
 from pathlib import Path
 from urllib.parse import urlparse
 
-from sqlalchemy import func
+from sqlalchemy import func, or_
 
 from darla.analysis.browser_downloader import browser_download
 from darla.analysis.hasher import compute_hashes as do_hash, compute_tlsh_distance
@@ -168,6 +168,88 @@ def _can_dispatch_browser_render(
 # ---------------------------------------------------------------------------
 # Dedup helpers
 # ---------------------------------------------------------------------------
+
+# SHA256 of the empty byte string — every 0-byte download shares it, so
+# it is never a meaningful dedup signal.
+EMPTY_SHA256 = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+
+
+def find_sha256_match(
+    db, sha256: str, exclude_kit_id, investigation_id,
+) -> Kit | None:
+    """Return another kit with *sha256*, preferring the same investigation.
+
+    Callers treat a same-investigation match as redundancy (mark FAILED)
+    and a cross-investigation match as a correlation signal (keep
+    analyzing).  An unordered ``.first()`` over all investigations can
+    surface the cross-investigation row even when a same-investigation
+    duplicate exists, silently downgrading redundancy to correlation —
+    so look in the kit's own investigation first.
+    """
+    same = db.query(Kit).filter(
+        Kit.sha256 == sha256,
+        Kit.id != exclude_kit_id,
+        Kit.investigation_id == investigation_id,
+    ).first()
+    if same is not None:
+        return same
+    return db.query(Kit).filter(
+        Kit.sha256 == sha256,
+        Kit.id != exclude_kit_id,
+    ).first()
+
+
+def find_redundant_render_reason(db, kit: Kit, sha256: str | None) -> str | None:
+    """Return why a pre-analysis browser render of *kit* is redundant.
+
+    ``download_kit`` dispatches Tier A renders (JS loader, embedded
+    Turnstile, OAuth handoff) *before* ``compute_hashes`` gets a chance
+    to dedup the kit.  Once queued, a render can't be recalled: it burns
+    a 60-150s browser slot and — when the page carries per-request
+    nonces so the rendered bytes differ — spawns a whole duplicate
+    subtree.  Returns ``None`` when the render should proceed.
+
+    Two cases are provably redundant:
+      1. **Same-investigation SHA256 duplicate.**  ``compute_hashes``
+         will mark this kit FAILED; rendering it is wasted work.
+      2. **Redirect child of an already-rendered parent.**  The parent's
+         browser render started at the parent URL and followed the same
+         redirect to this kit's URL (the mirror of ``crawl_chain``
+         skipping browser_render kits).  Error-FAILED parent renders
+         don't count — the child gets its own attempt.  Renders FAILED
+         as duplicates *do* count: the browser reached the page fine.
+
+    Only investigation kits are checked; feed kits keep existing behavior.
+    """
+    if kit.investigation_id is None:
+        return None
+
+    if sha256 and sha256 != EMPTY_SHA256:
+        dup = db.query(Kit).filter(
+            Kit.investigation_id == kit.investigation_id,
+            Kit.sha256 == sha256,
+            Kit.id != kit.id,
+        ).first()
+        if dup is not None:
+            return f"same-investigation SHA256 duplicate of kit {dup.id}"
+
+    if kit.discovery_method == "redirect" and kit.parent_kit_id:
+        render = db.query(Kit).filter(
+            Kit.parent_kit_id == kit.parent_kit_id,
+            Kit.discovery_method == "browser_render",
+            or_(
+                Kit.status != KitStatus.FAILED,
+                Kit.duplicate_of_kit_id.isnot(None),
+            ),
+        ).first()
+        if render is not None:
+            return (
+                f"parent's browser render {render.id} already followed "
+                f"this redirect"
+            )
+
+    return None
+
 
 def _walk_ancestor_chain(db, kit: Kit, max_depth: int = 5) -> list[Kit]:
     """Walk ``parent_kit_id`` links up to root.
@@ -563,13 +645,9 @@ def browser_download_kit(
             # and direct-sibling matches above are always within the
             # same investigation.
             if matched_kit is None and child_hashes.sha256:
-                existing = (
-                    db.query(Kit)
-                    .filter(
-                        Kit.sha256 == child_hashes.sha256,
-                        Kit.id != child_kit.id,
-                    )
-                    .first()
+                existing = find_sha256_match(
+                    db, child_hashes.sha256, child_kit.id,
+                    child_kit.investigation_id,
                 )
                 if existing is not None:
                     matched_kit = existing

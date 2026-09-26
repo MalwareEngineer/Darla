@@ -61,12 +61,15 @@ def _dispatch_browser_render(db, parent_kit, kit_id: str, log_context: str) -> b
     queue="downloads",
 )
 def download_kit(
-    self, kit_id: str, dispatch_followups: bool = True,
+    self, kit_id: str, dispatch_followups: bool = True, force: bool = False,
 ) -> dict:
     """Download a phishing kit archive from its source URL.
 
     Updates the kit record with file metadata and transitions
     status to DOWNLOADED or FAILED.
+
+    ``force`` (set on force-resubmit) bypasses the browser-render
+    redundancy check, matching ``compute_hashes`` skipping SHA256 dedup.
 
     When ``dispatch_followups`` is ``False``, the task performs ONLY
     the download step — no browser-render dispatch, no OAuth
@@ -360,9 +363,38 @@ def download_kit(
             else:
                 result["redirect_urls"] = []
 
+        # The Tier A dispatches below run before compute_hashes can dedup
+        # this kit, and a queued render can't be recalled.  Skip them when
+        # the render would provably duplicate work already in the
+        # investigation (see find_redundant_render_reason).
+        render_redundant: str | None = None
+        if (
+            dispatch_followups
+            and settings.browser_download_enabled
+            and not force
+            and kit.investigation_id
+        ):
+            import hashlib
+
+            from darla.tasks.browser import find_redundant_render_reason
+
+            render_redundant = find_redundant_render_reason(
+                db, kit, hashlib.sha256(filepath.read_bytes()).hexdigest(),
+            )
+            if render_redundant:
+                result["browser_render_skipped"] = render_redundant
+                logger.info(
+                    "Kit %s: browser render skipped (%s)",
+                    kit_id, render_redundant,
+                )
+
         # Tier A: JS loader / embedded challenge detection
         # → dispatch browser render in parallel with analysis chain
-        if dispatch_followups and settings.browser_download_enabled:
+        if (
+            dispatch_followups
+            and settings.browser_download_enabled
+            and not render_redundant
+        ):
             is_html_like = (
                 suffix in (".html", ".htm", ".bin", "")
                 or kit.mime_type == "application/octet-stream"
@@ -412,6 +444,7 @@ def download_kit(
             and settings.browser_download_enabled
             and is_oauth_authorize_url(kit.source_url)
             and not result.get("browser_render_dispatched")
+            and not render_redundant
         ):
             if _dispatch_browser_render(
                 db, kit, kit_id, "OAuth authorize URL",
