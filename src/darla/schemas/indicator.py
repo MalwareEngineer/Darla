@@ -14,6 +14,9 @@ class IndicatorSummary(BaseModel):
     value: str
     confidence: int
     source_file: str | None
+    # Source line the IOC came from (capped at 200 chars at extraction).
+    # The indicators list renders it under each value.
+    context: str | None = None
     kit_id: uuid.UUID
     created_at: datetime
 
@@ -21,7 +24,6 @@ class IndicatorSummary(BaseModel):
 
 
 class IndicatorDetail(IndicatorSummary):
-    context: str | None
     actor_id: uuid.UUID | None
 
     model_config = {"from_attributes": True}

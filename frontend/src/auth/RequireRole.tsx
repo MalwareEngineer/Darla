@@ -22,7 +22,7 @@
  */
 
 import type { ReactNode } from "react";
-import type { Role } from "./AuthProvider";
+import type { Role } from "./authContext";
 import { useAuth } from "./useAuth";
 
 // Re-export so callers can `import { Role } from "@/auth/RequireRole"`

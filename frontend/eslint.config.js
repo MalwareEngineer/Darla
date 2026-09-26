@@ -20,4 +20,13 @@ export default defineConfig([
       globals: globals.browser,
     },
   },
+  {
+    // shadcn/ui primitives co-export their cva variant helpers
+    // (buttonVariants, badgeVariants, …) by design.  Fast Refresh falls
+    // back to a full reload for these files, which is fine for leaf UI.
+    files: ['src/components/ui/**/*.{ts,tsx}'],
+    rules: {
+      'react-refresh/only-export-components': 'off',
+    },
+  },
 ])

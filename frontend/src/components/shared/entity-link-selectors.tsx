@@ -77,7 +77,7 @@ export function EntityLinkSelectors({
           <Select
             value={actorId ?? NONE}
             onValueChange={(v) =>
-              onActorChange(v === NONE ? undefined : v)
+              onActorChange(v === NONE || v == null ? undefined : v)
             }
           >
             <SelectTrigger className="w-full">
@@ -98,7 +98,7 @@ export function EntityLinkSelectors({
           <Select
             value={campaignId ?? NONE}
             onValueChange={(v) =>
-              onCampaignChange(v === NONE ? undefined : v)
+              onCampaignChange(v === NONE || v == null ? undefined : v)
             }
           >
             <SelectTrigger className="w-full">
@@ -119,7 +119,7 @@ export function EntityLinkSelectors({
           <Select
             value={familyId ?? NONE}
             onValueChange={(v) =>
-              onFamilyChange(v === NONE ? undefined : v)
+              onFamilyChange(v === NONE || v == null ? undefined : v)
             }
           >
             <SelectTrigger className="w-full">
