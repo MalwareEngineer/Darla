@@ -28,11 +28,20 @@ deliberate friction is the point.
 
 from __future__ import annotations
 
+from unittest.mock import patch
+
 import pytest
 from fastapi.routing import APIRoute
 
 from darla.auth.middleware import current_user
-from darla.main import app
+
+# ``darla.main`` builds the app at import, which runs the startup
+# guardrails — including the cloud-metadata probe.  CI runners are cloud
+# VMs whose metadata endpoint answers at 169.254.169.254, so stub the
+# probe for this import only (tests/conftest.py pins the other
+# no-auth guardrail settings).
+with patch("darla.auth.guardrails._imds_is_reachable", return_value=False):
+    from darla.main import app
 
 # Routes that are intentionally anonymous.  Every entry should have a
 # matching reason — RFC reference or specific design constraint.
