@@ -89,8 +89,8 @@ async def link_kits(
     service = FamilyService(db)
     try:
         count = await service.link_kits(family_id, payload.kit_ids)
-    except ValueError:
-        raise HTTPException(status_code=404, detail="Family not found")
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail="Family not found") from e
     return {"added": count}
 
 
@@ -101,8 +101,8 @@ async def link_actors(
     service = FamilyService(db)
     try:
         count = await service.link_actors(family_id, payload.actor_ids)
-    except ValueError:
-        raise HTTPException(status_code=404, detail="Family not found")
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail="Family not found") from e
     return {"added": count}
 
 

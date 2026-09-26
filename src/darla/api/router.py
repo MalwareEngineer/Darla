@@ -50,16 +50,37 @@ api_router.include_router(health.router, prefix="/health", tags=["health"])
 
 # Everything else requires authentication.
 api_router.include_router(kits.router, prefix="/kits", tags=["kits"], dependencies=_AUTH)
-api_router.include_router(investigations.router, prefix="/investigations", tags=["investigations"], dependencies=_AUTH)
-api_router.include_router(indicators.router, prefix="/indicators", tags=["indicators"], dependencies=_AUTH)
+api_router.include_router(
+    investigations.router, prefix="/investigations", tags=["investigations"],
+    dependencies=_AUTH,
+)
+api_router.include_router(
+    indicators.router, prefix="/indicators", tags=["indicators"],
+    dependencies=_AUTH,
+)
 api_router.include_router(actors.router, prefix="/actors", tags=["actors"], dependencies=_AUTH)
-api_router.include_router(campaigns.router, prefix="/campaigns", tags=["campaigns"], dependencies=_AUTH)
-api_router.include_router(families.router, prefix="/families", tags=["families"], dependencies=_AUTH)
-api_router.include_router(analysis.router, prefix="/analysis", tags=["analysis"], dependencies=_AUTH)
+api_router.include_router(
+    campaigns.router, prefix="/campaigns", tags=["campaigns"],
+    dependencies=_AUTH,
+)
+api_router.include_router(
+    families.router, prefix="/families", tags=["families"],
+    dependencies=_AUTH,
+)
+api_router.include_router(
+    analysis.router, prefix="/analysis", tags=["analysis"],
+    dependencies=_AUTH,
+)
 api_router.include_router(diff.router, prefix="/diff", tags=["diff"], dependencies=_AUTH)
 api_router.include_router(yara.router, prefix="/yara", tags=["yara"], dependencies=_AUTH)
-api_router.include_router(phishmatch.router, prefix="/phishmatch", tags=["phishmatch"], dependencies=_AUTH)
-api_router.include_router(victims.router, prefix="/victims", tags=["phishprint"], dependencies=_AUTH)
+api_router.include_router(
+    phishmatch.router, prefix="/phishmatch", tags=["phishmatch"],
+    dependencies=_AUTH,
+)
+api_router.include_router(
+    victims.router, prefix="/victims", tags=["phishprint"],
+    dependencies=_AUTH,
+)
 api_router.include_router(
     monitored_domains.router,
     prefix="/monitored-domains", tags=["phishprint"], dependencies=_AUTH,

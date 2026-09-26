@@ -1,12 +1,11 @@
 """Tests for js_fetcher extensions that handle SVG inputs and terminal URL classification."""
 
 from darla.analysis.js_fetcher import (
+    JS_DYNAMIC_URL_RE,
     SCANNABLE_EXTENSIONS,
     SCRIPT_SRC_RE,
-    JS_DYNAMIC_URL_RE,
     ExternalJSFetcher,
 )
-
 
 # ---- SCANNABLE_EXTENSIONS ------------------------------------------------
 

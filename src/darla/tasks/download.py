@@ -10,11 +10,19 @@ from darla.celery_app import celery_app
 from darla.config import get_settings
 from darla.database import get_sync_db
 from darla.models.analysis_result import AnalysisType
-from darla.tasks.analysis import upsert_analysis_result
 from darla.models.kit import Kit, KitStatus
+from darla.tasks.analysis import upsert_analysis_result
 from darla.utils.http_client import download_file
 
 logger = logging.getLogger(__name__)
+
+# Markers of a Cloudflare Turnstile/challenge embedded in an HTTP 200
+# body (Tier A.5 browser dispatch).
+_CF_BODY_MARKERS = (
+    "challenges.cloudflare.com/turnstile",
+    "cf-turnstile",
+    "data-sitekey",
+)
 
 
 def _dispatch_browser_render(db, parent_kit, kit_id: str, log_context: str) -> bool:
@@ -199,11 +207,10 @@ def download_kit(
                 dispatch_followups
                 and settings.browser_download_enabled
                 and is_oauth_authorize_url(kit.source_url)
+            ) and _dispatch_browser_render(
+                db, kit, kit_id, "OAuth authorize URL (fast-path)",
             ):
-                if _dispatch_browser_render(
-                    db, kit, kit_id, "OAuth authorize URL (fast-path)",
-                ):
-                    result["browser_render_dispatched"] = True
+                result["browser_render_dispatched"] = True
             return result
 
         kit.status = KitStatus.DOWNLOADING
@@ -248,33 +255,35 @@ def download_kit(
                 max_size_mb=settings.max_kit_size_mb,
             )
 
-        if not filepath:
-            # Dispatch to browser worker for Cloudflare-protected pages
-            # and for OAuth authorize URLs (attacker-registered apps may
-            # be dead at the IdP but the stored ``source_url`` is often
-            # served via a browser-only JS handoff — we still want
-            # Camoufox to try it before declaring FAILED).
-            if dispatch_followups and settings.browser_download_enabled:
-                from darla.analysis.browser_downloader import (
-                    is_cloudflare_challenge,
-                )
+        # Dispatch to browser worker for Cloudflare-protected pages and for
+        # OAuth authorize URLs (attacker-registered apps may be dead at the
+        # IdP but the stored ``source_url`` is often served via a
+        # browser-only JS handoff — we still want Camoufox to try it before
+        # declaring FAILED).
+        if (
+            not filepath
+            and dispatch_followups
+            and settings.browser_download_enabled
+        ):
+            from darla.analysis.browser_downloader import (
+                is_cloudflare_challenge,
+            )
 
-                should_browser_retry = (
-                    is_cloudflare_challenge(reason)
-                    or is_oauth_authorize_url(kit.source_url)
-                )
-                if should_browser_retry:
-                    if _dispatch_browser_render(
-                        db, kit, kit_id,
-                        f"httpx failed ({reason}), retrying via browser",
-                    ):
-                        result = {
-                            "kit_id": kit_id,
-                            "status": "browser_retry",
-                        }
-                        if redirect_chain_data:
-                            result["redirect_chain"] = redirect_chain_data
-                        return result
+            should_browser_retry = (
+                is_cloudflare_challenge(reason)
+                or is_oauth_authorize_url(kit.source_url)
+            )
+            if should_browser_retry and _dispatch_browser_render(
+                db, kit, kit_id,
+                f"httpx failed ({reason}), retrying via browser",
+            ):
+                result = {
+                    "kit_id": kit_id,
+                    "status": "browser_retry",
+                }
+                if redirect_chain_data:
+                    result["redirect_chain"] = redirect_chain_data
+                return result
 
         if not filepath:
             kit.status = KitStatus.FAILED
@@ -415,11 +424,6 @@ def download_kit(
                         body = filepath.read_text(
                             encoding="utf-8", errors="ignore",
                         )[:100_000]
-                        _CF_BODY_MARKERS = [
-                            "challenges.cloudflare.com/turnstile",
-                            "cf-turnstile",
-                            "data-sitekey",
-                        ]
                         if any(m in body for m in _CF_BODY_MARKERS):
                             dispatch_reason = (
                                 "Cloudflare Turnstile in response body"
@@ -427,11 +431,10 @@ def download_kit(
                     except Exception:
                         pass
 
-                if dispatch_reason is not None:
-                    if _dispatch_browser_render(
-                        db, kit, kit_id, dispatch_reason,
-                    ):
-                        result["browser_render_dispatched"] = True
+                if dispatch_reason is not None and _dispatch_browser_render(
+                    db, kit, kit_id, dispatch_reason,
+                ):
+                    result["browser_render_dispatched"] = True
 
         # Tier A.6: OAuth authorize URL — the body we downloaded is an
         # IdP handoff scaffold (Microsoft's 200 with JS that hands off to
@@ -445,11 +448,10 @@ def download_kit(
             and is_oauth_authorize_url(kit.source_url)
             and not result.get("browser_render_dispatched")
             and not render_redundant
+        ) and _dispatch_browser_render(
+            db, kit, kit_id, "OAuth authorize URL",
         ):
-            if _dispatch_browser_render(
-                db, kit, kit_id, "OAuth authorize URL",
-            ):
-                result["browser_render_dispatched"] = True
+            result["browser_render_dispatched"] = True
 
         return result
 

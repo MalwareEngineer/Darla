@@ -19,7 +19,6 @@ from pathlib import Path
 from urllib.parse import urljoin, urlparse
 
 from darla.analysis.patterns import (
-    BENIGN_URL_ROOT_DOMAINS,
     extract_root_domain,
     is_benign_url,
 )
@@ -106,7 +105,7 @@ class JSFetchResult:
 def _is_private_ip(hostname: str) -> bool:
     """Check if a hostname resolves to a private/loopback IP (SSRF guard)."""
     try:
-        for family, _, _, _, sockaddr in socket.getaddrinfo(hostname, None):
+        for _family, _, _, _, sockaddr in socket.getaddrinfo(hostname, None):
             ip = sockaddr[0]
             if ip.startswith(("10.", "192.168.", "127.", "0.",
                               "172.16.", "172.17.", "172.18.", "172.19.",
@@ -199,10 +198,9 @@ class ExternalJSFetcher:
             # "ATT021.svg.." so the naive Path.suffix returns "." and misses.
             _norm_name = fpath.name.rstrip(". ")
             _norm_suffix = Path(_norm_name).suffix.lower()
-            if _norm_suffix not in SCANNABLE_EXTENSIONS:
-                # Also accept extensionless files that look like HTML
-                if _norm_suffix:
-                    continue
+            # Also accept extensionless files that look like HTML
+            if _norm_suffix not in SCANNABLE_EXTENSIONS and _norm_suffix:
+                continue
             self._process_file(fpath, js_dir, result, depth=0)
 
         # Save manifest

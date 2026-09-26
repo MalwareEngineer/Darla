@@ -19,7 +19,6 @@ from sqlalchemy import text
 
 from darla.database import get_sync_db
 
-
 # Benign root domain patterns for C2 URLs
 C2_URL_BENIGN_PATTERNS = [
     # Google ecosystem
@@ -236,7 +235,7 @@ def main():
         c2_assets = count_matching(db, "C2_URL", C2_URL_ASSET_PATTERNS)
         c2_junk = cleanup_trailing_junk(db, execute=False)
 
-        print(f"C2_URL cleanup:")
+        print("C2_URL cleanup:")
         print(f"  Benign service domains:  {c2_benign:>8,}")
         print(f"  Static asset URLs:       {c2_assets:>8,}")
         print(f"  Trailing syntax junk:    {c2_junk:>8,}")
@@ -248,7 +247,7 @@ def main():
         dom_benign = count_matching(db, "DOMAIN", DOMAIN_BENIGN_PATTERNS)
         dom_root = count_matching(db, "DOMAIN", DOMAIN_ROOT_BENIGN_PATTERNS)
 
-        print(f"DOMAIN cleanup:")
+        print("DOMAIN cleanup:")
         print(f"  Truncated/encoded/JS:    {dom_benign:>8,}")
         print(f"  Benign root domains:     {dom_root:>8,}")
         dom_total_remove = dom_benign + dom_root

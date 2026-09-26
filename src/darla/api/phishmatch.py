@@ -17,7 +17,7 @@ simple, small, and belongs in the request's transaction.
 """
 
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -206,7 +206,7 @@ async def attribute_kit(
             detail=f"{payload.entity_type.capitalize()} not found",
         )
 
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     values = {
         "kit_id": kit_id,
         entity_col_name: payload.entity_id,

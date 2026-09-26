@@ -11,10 +11,11 @@ Uses only stdlib ``html.parser`` — no new dependencies.
 from __future__ import annotations
 
 import base64
+import contextlib
 import hashlib
 import logging
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from html.parser import HTMLParser
 from pathlib import Path
 
@@ -120,10 +121,8 @@ class _TreeParser(HTMLParser):
 def _parse_html(html: str) -> list[_Element]:
     """Parse HTML string into normalised element list."""
     parser = _TreeParser()
-    try:
+    with contextlib.suppress(Exception):
         parser.feed(html)
-    except Exception:
-        pass
     return parser.elements
 
 
@@ -282,8 +281,8 @@ def detect_variants(
         # Check TLSH distances are in the polymorphism range
         # (above dedup threshold but below unrelatedness ceiling)
         has_polymorphic_pair = False
-        for i, (kid_a, tlsh_a, _) in enumerate(group):
-            for kid_b, tlsh_b, _ in group[i + 1:]:
+        for i, (_kid_a, tlsh_a, _) in enumerate(group):
+            for _kid_b, tlsh_b, _ in group[i + 1:]:
                 if not tlsh_a or not tlsh_b:
                     continue
                 dist = compute_tlsh_distance(tlsh_a, tlsh_b)

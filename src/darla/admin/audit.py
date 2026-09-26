@@ -137,7 +137,8 @@ async def _recent_impl(
 
         rows = list((await db.scalars(q)).all())
 
-        table = Table(title=f"Audit log: {len(rows)} rows since {cutoff.isoformat(timespec='seconds')}")
+        since = cutoff.isoformat(timespec="seconds")
+        table = Table(title=f"Audit log: {len(rows)} rows since {since}")
         table.add_column("time", style="dim")
         table.add_column("actor", overflow="fold")
         table.add_column("method")

@@ -18,9 +18,8 @@ from __future__ import annotations
 
 import inspect
 
-from darla.services import actor_service
 from darla.schemas.actor import ActorStats
-
+from darla.services import actor_service
 
 # ---------------------------------------------------------------------------
 # get_stats — the Overview-tab payload

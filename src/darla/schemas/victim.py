@@ -9,7 +9,6 @@ from pydantic import BaseModel, EmailStr, Field
 
 from darla.models.victim import VictimObservationSource, VictimType
 
-
 # ---------------------------------------------------------------------------
 # MonitoredDomain
 # ---------------------------------------------------------------------------

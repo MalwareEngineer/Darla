@@ -43,7 +43,6 @@ from darla.models import (
 )
 from darla.models.victim import VictimType
 
-
 # ---------------------------------------------------------------------------
 # Async SQLite harness, but the TEST is sync — see module docstring.
 # ---------------------------------------------------------------------------

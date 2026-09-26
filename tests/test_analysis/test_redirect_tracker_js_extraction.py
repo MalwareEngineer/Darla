@@ -30,7 +30,6 @@ from __future__ import annotations
 
 from darla.analysis.redirect_tracker import _extract_js_redirect
 
-
 # ---------------------------------------------------------------------------
 # The Azure OAuth AITM case — the specific regression that drove this work.
 # ---------------------------------------------------------------------------

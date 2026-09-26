@@ -7,9 +7,9 @@ from fastapi import APIRouter, HTTPException, Query
 from darla.api.deps import DbSession, Pagination
 from darla.schemas.diff import (
     DiffablePair,
+    DiffChangeCategory,
     DiffCompareRequest,
     DiffCompareResponse,
-    DiffChangeCategory,
     DiffCompareSummary,
     DiffKitContent,
     DiffPairGroup,
@@ -59,7 +59,6 @@ async def get_diffable_pairs(
 @router.post("/compare", response_model=DiffCompareResponse)
 async def compare_kits(body: DiffCompareRequest, db: DbSession):
     """Compare two kits: returns HTML content + structured diff summary."""
-    import re
 
     from darla.analysis.hasher import compute_tlsh_distance
     from darla.analysis.polymorphism import (
@@ -127,19 +126,20 @@ async def compare_kits(body: DiffCompareRequest, db: DbSession):
     )
 
 
+_VOID_ELEMENTS = frozenset({
+    "area", "base", "br", "col", "embed", "hr", "img", "input",
+    "link", "meta", "param", "source", "track", "wbr",
+})
+_INLINE_ELEMENTS = frozenset({
+    "a", "abbr", "b", "bdi", "bdo", "cite", "code", "em", "i",
+    "kbd", "mark", "q", "s", "samp", "small", "span", "strong",
+    "sub", "sup", "time", "u", "var",
+})
+
+
 def _beautify_html(html: str) -> str:
     """Pretty-print HTML so each tag gets its own line for readable diffs."""
     from html.parser import HTMLParser
-
-    VOID_ELEMENTS = frozenset({
-        "area", "base", "br", "col", "embed", "hr", "img", "input",
-        "link", "meta", "param", "source", "track", "wbr",
-    })
-    INLINE_ELEMENTS = frozenset({
-        "a", "abbr", "b", "bdi", "bdo", "cite", "code", "em", "i",
-        "kbd", "mark", "q", "s", "samp", "small", "span", "strong",
-        "sub", "sup", "time", "u", "var",
-    })
 
     lines: list[str] = []
     indent = 0
@@ -161,9 +161,7 @@ def _beautify_html(html: str) -> str:
                     else:
                         parts.append(f'{k}="{v}"')
                 attr_str = " " + " ".join(parts)
-            if tag in VOID_ELEMENTS:
-                lines.append(f"{'  ' * indent}<{tag}{attr_str}>")
-            elif tag in INLINE_ELEMENTS:
+            if tag in _VOID_ELEMENTS or tag in _INLINE_ELEMENTS:
                 lines.append(f"{'  ' * indent}<{tag}{attr_str}>")
             else:
                 lines.append(f"{'  ' * indent}<{tag}{attr_str}>")
@@ -171,7 +169,7 @@ def _beautify_html(html: str) -> str:
 
         def handle_endtag(self, tag: str) -> None:
             nonlocal indent
-            if tag not in VOID_ELEMENTS and tag not in INLINE_ELEMENTS:
+            if tag not in _VOID_ELEMENTS and tag not in _INLINE_ELEMENTS:
                 indent = max(0, indent - 1)
             lines.append(f"{'  ' * indent}</{tag}>")
 

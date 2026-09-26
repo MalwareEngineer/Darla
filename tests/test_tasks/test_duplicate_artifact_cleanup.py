@@ -29,7 +29,6 @@ import pytest
 from darla.models.investigation import InvestigationStatus
 from darla.models.kit import KitStatus
 
-
 # ---------------------------------------------------------------------------
 # Stub harness — minimal session-mock that records mutations + supports
 # the exact query shapes the cleanup task issues.
@@ -407,7 +406,7 @@ def test_cleanup_handles_already_missing_directory(tmp_path, patched_db):
         local_path=str(tmp_path / "ghost" / "page.html"),
     ))
 
-    result = cleanup_completed_investigation_duplicates(min_age_hours=24)
+    cleanup_completed_investigation_duplicates(min_age_hours=24)
 
     # Not counted as a deletion (no bytes freed) but local_path cleared.
     dup = next(k for k in patched_db.kits if k.id == dup_id)

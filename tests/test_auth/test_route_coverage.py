@@ -28,11 +28,23 @@ deliberate friction is the point.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+from typing import Any
+from unittest.mock import patch
+
 import pytest
+from fastapi import routing
 from fastapi.routing import APIRoute
 
 from darla.auth.middleware import current_user
-from darla.main import app
+
+# ``darla.main`` builds the app at import, which runs the startup
+# guardrails — including the cloud-metadata probe.  CI runners are cloud
+# VMs whose metadata endpoint answers at 169.254.169.254, so stub the
+# probe for this import only (tests/conftest.py pins the other
+# no-auth guardrail settings).
+with patch("darla.auth.guardrails._imds_is_reachable", return_value=False):
+    from darla.main import app
 
 # Routes that are intentionally anonymous.  Every entry should have a
 # matching reason — RFC reference or specific design constraint.
@@ -58,10 +70,40 @@ def _dependency_uses_current_user(dep) -> bool:
     return any(_dependency_uses_current_user(sub) for sub in dep.dependencies)
 
 
-def _api_routes() -> list[APIRoute]:
+@dataclass(frozen=True)
+class _Route:
+    """Effective route: full path, methods, and the dependency tree
+    including dependencies attached at ``include_router`` time."""
+
+    path: str
+    methods: frozenset[str]
+    dependant: Any
+
+
+def _api_routes() -> list[_Route]:
+    """Every ``/api/v1/`` route with its *effective* dependencies.
+
+    FastAPI >= 0.141 keeps included routers as nested ``_IncludedRouter``
+    entries instead of flattening them into ``app.routes``; the public
+    ``iter_route_contexts`` walks them the way OpenAPI generation does.
+    Older FastAPI flattens, so ``app.routes`` holds ``APIRoute`` objects
+    directly.  Without this, every check below passes vacuously on a
+    newer FastAPI — the baseline test is what caught it.
+    """
+    if hasattr(routing, "iter_route_contexts"):
+        candidates = [
+            (c.path, c.methods, getattr(c, "dependant", None))
+            for c in routing.iter_route_contexts(app.routes)
+        ]
+    else:
+        candidates = [
+            (r.path, r.methods, r.dependant)
+            for r in app.routes if isinstance(r, APIRoute)
+        ]
     return [
-        r for r in app.routes
-        if isinstance(r, APIRoute) and r.path.startswith("/api/v1/")
+        _Route(path, frozenset(methods or {"GET"}), dependant)
+        for path, methods, dependant in candidates
+        if path and path.startswith("/api/v1/") and dependant is not None
     ]
 
 
@@ -81,7 +123,7 @@ def test_route_coverage_baseline_exists():
     _api_routes(),
     ids=lambda r: f"{sorted(r.methods)[0]} {r.path}",
 )
-def test_route_is_gated_or_explicitly_anonymous(route: APIRoute):
+def test_route_is_gated_or_explicitly_anonymous(route: _Route):
     """Every API route must require ``current_user`` (directly or via
     ``require_role``) unless explicitly listed in
     :data:`ANONYMOUS_ALLOWLIST`.
@@ -126,7 +168,7 @@ def test_writes_require_analyst_role():
 
     # Expected ANALYST-gated routes — keep alphabetised within each
     # method for ease of review.
-    EXPECTED_ANALYST_WRITES: set[tuple[str, str]] = {
+    expected_analyst_writes: set[tuple[str, str]] = {
         ("DELETE", "/api/v1/actors/{actor_id}"),
         ("DELETE", "/api/v1/campaigns/{campaign_id}"),
         ("DELETE", "/api/v1/families/{family_id}"),
@@ -184,8 +226,8 @@ def test_writes_require_analyst_role():
             for m in route.methods or {"GET"}:
                 actual_analyst_gated.add((m, route.path))
 
-    missing = EXPECTED_ANALYST_WRITES - actual_analyst_gated
-    unexpected = actual_analyst_gated - EXPECTED_ANALYST_WRITES
+    missing = expected_analyst_writes - actual_analyst_gated
+    unexpected = actual_analyst_gated - expected_analyst_writes
 
     # Reference require_role to keep the import live for static-analysis
     # tools that flag "imported but unused"; the actual detection works
@@ -193,11 +235,11 @@ def test_writes_require_analyst_role():
     _ = require_role
 
     assert not missing, (
-        f"These routes are expected to require ANALYST but don't:\n"
+        "These routes are expected to require ANALYST but don't:\n"
         + "\n".join(f"  {m} {p}" for m, p in sorted(missing))
     )
     assert not unexpected, (
-        f"These routes are ANALYST-gated but not in the EXPECTED list "
-        f"— add them to the test if intentional:\n"
+        "These routes are ANALYST-gated but not in the EXPECTED list "
+        "— add them to the test if intentional:\n"
         + "\n".join(f"  {m} {p}" for m, p in sorted(unexpected))
     )

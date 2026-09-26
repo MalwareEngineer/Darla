@@ -1,7 +1,6 @@
 """Actor business logic."""
 
 import uuid
-from datetime import datetime
 
 from sqlalchemy import desc, func, select
 from sqlalchemy.ext.asyncio import AsyncSession

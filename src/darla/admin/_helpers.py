@@ -14,10 +14,11 @@ Two responsibilities:
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import os
 import time
 import uuid
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable
 from typing import Any, TypeVar
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -25,11 +26,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from darla.database import async_session_factory
 from darla.models import AuditLog
 
-
 T = TypeVar("T")
 
 
-def run_async(coro: Awaitable[T]) -> T:
+def run_async[T](coro: Awaitable[T]) -> T:
     """Drive an async coroutine from a sync Typer command.
 
     Trivial wrapper, but having one entry point lets us swap in a
@@ -123,7 +123,7 @@ class _AuditedCommand:
         self._start: float = 0.0
         self._db: AsyncSession | None = None
 
-    async def __aenter__(self) -> "_AuditedCommand":
+    async def __aenter__(self) -> _AuditedCommand:
         self._start = time.monotonic()
         self._db = async_session_factory()
         await self._db.__aenter__()
@@ -139,12 +139,14 @@ class _AuditedCommand:
             # "unexpected error" code.  Real exceptions still flag as 2.
             import typer
 
-            if exc_type is None or (exc_type is typer.Exit):
-                status = self.status
-            else:
-                status = 2
+            status = self.status if exc_type is None or exc_type is typer.Exit else 2
             if self._db is not None:
-                try:
+                # Audit write failed — log? swallow?  The CLI's primary job
+                # is to perform the operation; an audit failure shouldn't
+                # mask the original outcome.  We swallow here for the same
+                # reason the HTTP middleware does (RFC §5.2).  In a future
+                # hardening pass we could log this to stderr.
+                with contextlib.suppress(Exception):
                     await write_cli_audit_row(
                         self._db,
                         command=self.command,
@@ -152,14 +154,6 @@ class _AuditedCommand:
                         status_code=status,
                         elapsed_ms=elapsed_ms,
                     )
-                except Exception:
-                    # Audit write failed — log? swallow?  The CLI's
-                    # primary job is to perform the operation; an audit
-                    # failure shouldn't mask the original outcome.
-                    # We swallow here for the same reason the HTTP
-                    # middleware does (RFC §5.2).  In a future hardening
-                    # pass we could log this to stderr.
-                    pass
         finally:
             if self._db is not None:
                 await self._db.__aexit__(exc_type, exc_value, tb)

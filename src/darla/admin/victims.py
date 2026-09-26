@@ -89,7 +89,8 @@ def _parse_csv(path: Path) -> list[dict[str, str]]:
                 "[red]CSV missing required 'email' column header[/red]"
             )
             raise typer.Exit(2)
-        for i, raw in enumerate(reader, start=2):  # start=2 so error reports match line numbers (after header)
+        # start=2 so error reports match file line numbers (after header)
+        for i, raw in enumerate(reader, start=2):
             email = (raw.get("email") or "").strip().lower()
             if not email or "@" not in email:
                 console.print(f"[red]row {i}: invalid email {email!r}[/red]")

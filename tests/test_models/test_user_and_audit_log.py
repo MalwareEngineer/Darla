@@ -32,7 +32,6 @@ from darla.models import (
     UserRole,
 )
 
-
 # ---------------------------------------------------------------------------
 # Pure-Python (no DB) — behaviour that lives entirely on the model class.
 # ---------------------------------------------------------------------------

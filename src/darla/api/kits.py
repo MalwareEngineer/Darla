@@ -1,5 +1,6 @@
 """Kit API endpoints."""
 
+import contextlib
 import uuid
 from pathlib import Path
 
@@ -34,6 +35,10 @@ router = APIRouter()
 # See darla.api.actors for rationale on the shorthand.
 _ANALYST = [Depends(require_role(UserRole.ANALYST))]
 
+# Uploads that may spawn child kits get an auto-created investigation:
+# .eml (clickable links) and images (QR codes).
+_IMAGE_EXTS = frozenset({".png", ".jpg", ".jpeg", ".gif", ".bmp", ".webp"})
+
 
 async def _link_kit_to_entities(
     db,
@@ -47,19 +52,15 @@ async def _link_kit_to_entities(
         from darla.services.campaign_service import CampaignService
 
         campaign_svc = CampaignService(db)
-        try:
+        with contextlib.suppress(ValueError):
             await campaign_svc.add_kits(campaign_id, [kit_id])
-        except ValueError:
-            pass
 
     if family_id:
         from darla.services.family_service import FamilyService
 
         family_svc = FamilyService(db)
-        try:
+        with contextlib.suppress(ValueError):
             await family_svc.link_kits(family_id, [kit_id])
-        except ValueError:
-            pass
 
     if actor_id:
         from sqlalchemy import select
@@ -169,9 +170,8 @@ async def upload_kit(
     #  - .eml files (contain clickable links)
     #  - Image files (may contain QR codes with phishing URLs)
     filename_lower = (file.filename or "").lower()
-    IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".gif", ".bmp", ".webp"}
     needs_investigation = filename_lower.endswith(".eml") or any(
-        filename_lower.endswith(ext) for ext in IMAGE_EXTS
+        filename_lower.endswith(ext) for ext in _IMAGE_EXTS
     )
     if needs_investigation:
         from darla.services.investigation_service import InvestigationService
@@ -243,12 +243,11 @@ async def bulk_upload_kits(
     inv_service = InvestigationService(db)
     final_results: list[KitBulkUploadResult] = []
 
-    IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".gif", ".bmp", ".webp"}
     for entry, result in zip(file_entries, results, strict=False):
         investigation_id = None
         fname = entry["filename"].lower()
         needs_inv = fname.endswith(".eml") or any(
-            fname.endswith(ext) for ext in IMAGE_EXTS
+            fname.endswith(ext) for ext in _IMAGE_EXTS
         )
         if needs_inv:
             kit = await service.get_kit(result["kit_id"])
@@ -465,7 +464,9 @@ async def get_kit_browser_resources(kit_id: uuid.UUID, db: DbSession) -> Browser
 
 
 @router.get("/{kit_id}/deobfuscation-preview", response_model=DeobfuscationPreviewResponse)
-async def get_kit_deobfuscation_preview(kit_id: uuid.UUID, db: DbSession) -> DeobfuscationPreviewResponse:
+async def get_kit_deobfuscation_preview(
+    kit_id: uuid.UUID, db: DbSession,
+) -> DeobfuscationPreviewResponse:
     service = KitService(db)
     pairs = await service.get_kit_deobfuscation_preview(kit_id)
     if pairs is None:
@@ -499,7 +500,6 @@ async def add_kit_to_campaign(
     added instead so the full chain stays together.  Returns which kit
     was actually linked.
     """
-    from pydantic import BaseModel
 
     campaign_id = payload.get("campaign_id")
     if not campaign_id:

@@ -50,7 +50,6 @@ from darla.services.victim_service import (
     observe_victim_email,
 )
 
-
 # ---------------------------------------------------------------------------
 # In-process SQLite harness — the observation logic is pure ORM (no
 # Postgres-specific features in this code path) so an in-memory

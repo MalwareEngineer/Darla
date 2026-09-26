@@ -12,8 +12,8 @@ from darla.celery_app import celery_app
 from darla.config import get_settings
 from darla.database import get_sync_db
 from darla.models.analysis_result import AnalysisType
-from darla.tasks.analysis import upsert_analysis_result
 from darla.models.kit import Kit
+from darla.tasks.analysis import upsert_analysis_result
 
 logger = logging.getLogger(__name__)
 
@@ -87,8 +87,8 @@ def parse_eml(self, prev_result: dict) -> dict:
         )
 
         # Extract IOCs from EML headers (sender domain, Return-Path, IPs)
-        from darla.models.indicator import Indicator, IndicatorType
         from darla.analysis.patterns import BENIGN_DOMAINS, extract_root_domain
+        from darla.models.indicator import Indicator, IndicatorType
 
         eml_iocs_added = 0
 
@@ -267,9 +267,10 @@ def parse_eml(self, prev_result: dict) -> dict:
         # attachment extraction, its own SVG / JS loader / QR pipeline).
         nested_spawned: list[str] = []
         if saved_nested:
-            from darla.models.kit import Kit as KitModel, KitStatus
+            from darla.models.kit import Kit as KitModel
+            from darla.models.kit import KitStatus
 
-            for nested, nested_path in saved_nested:
+            for _nested, nested_path in saved_nested:
                 p = Path(nested_path)
                 existing = db.query(KitModel).filter(
                     KitModel.parent_kit_id == kit.id,
@@ -331,7 +332,8 @@ def parse_eml(self, prev_result: dict) -> dict:
         browser_renders_dispatched = []
         if settings.browser_download_enabled and saved_files:
             from darla.analysis.browser_downloader import is_js_loader
-            from darla.models.kit import Kit as KitModel, KitStatus
+            from darla.models.kit import Kit as KitModel
+            from darla.models.kit import KitStatus
 
             for fpath in saved_files:
                 p = Path(fpath)

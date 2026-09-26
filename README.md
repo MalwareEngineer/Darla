@@ -23,6 +23,12 @@ local evaluation by a single user. To deploy for a team behind an identity
 provider, see [docs/auth/](docs/auth/README.md) — guides for Microsoft Entra,
 Okta, Auth0, Keycloak, Authelia, Pocket-ID, and the generic OIDC pattern.
 
+**Production deployments** keep everything organization-specific out of this
+repository: provide your own `monitored_domains.yaml` and victim CSV to
+`darla-admin` at runtime, keep credentials in a secrets manager, and keep
+IaC and environment files in a separate private deployment repository. See
+[CONTRIBUTING.md](CONTRIBUTING.md) for the public/private boundary.
+
 ### YARA Rules
 
 ```bash

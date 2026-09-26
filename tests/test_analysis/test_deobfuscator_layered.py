@@ -14,7 +14,6 @@ import pytest
 
 from darla.analysis.deobfuscator import JSDeobfuscator
 
-
 # ---------------------------------------------------------------------------
 # Encoders — the inverse of each decoder primitive. We compose them to
 # forge synthetic "encoded seeds" matching real-world loader pipelines.
@@ -178,7 +177,10 @@ def test_resolver_decodes_hex_literal(deob: JSDeobfuscator) -> None:
     # String.fromCharCode(parseInt(h[i],16)) style loops. No XOR.
     url = "https://example.com/step5.js"
     hex_blob = url.encode("utf-8").hex()
-    fake_js = f'var h="{hex_blob}";for(var i=0;i<h.length;i+=2){{o+=String.fromCharCode(parseInt(h.substr(i,2),16));}}'
+    fake_js = (
+        f'var h="{hex_blob}";'
+        "for(var i=0;i<h.length;i+=2){o+=String.fromCharCode(parseInt(h.substr(i,2),16));}"
+    )
     resolved = deob._resolve_js_string_literals(fake_js)
     assert url in resolved
     assert deob.URL_PATTERN.search(resolved) is not None
@@ -215,7 +217,10 @@ def test_long_payload_does_not_oom(deob: JSDeobfuscator) -> None:
     garbage = "".join(
         [string.ascii_letters] * 200,
     )[:4000]  # ~4KB of non-base64 junk wrapped in quotes
-    source = f'var d=atob("{garbage}");var h=d.match(/.{{2}}/g);for(var i=0;i<h.length;i++)x+=parseInt(h[i],16)^5;'
+    source = (
+        f'var d=atob("{garbage}");'
+        "var h=d.match(/.{2}/g);for(var i=0;i<h.length;i++)x+=parseInt(h[i],16)^5;"
+    )
     # Should not raise.
     result = deob._try_layered_decode_chain(source)
     assert result is None or isinstance(result, tuple)
