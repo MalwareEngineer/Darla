@@ -6,7 +6,7 @@ import logging
 import re
 from dataclasses import dataclass, field
 from html.parser import HTMLParser
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 logger = logging.getLogger(__name__)
 
@@ -115,7 +115,10 @@ def _safe_attachment_name(name: str | None) -> str:
     if not name:
         return "attachment"
     # Basename only — never honor attacker-supplied path components.
-    base = Path(name).name
+    # Treat ``\`` as a separator on every platform: attackers send
+    # Windows-style paths, and the workers run on Linux, where
+    # ``Path(...).name`` keeps a backslash-separated directory part.
+    base = PurePosixPath(name.replace("\\", "/")).name
     cleaned = _BAD_FILENAME_CHARS.sub("_", base).rstrip(". ")
     return cleaned or "attachment"
 

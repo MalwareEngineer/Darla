@@ -28,9 +28,12 @@ deliberate friction is the point.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+from typing import Any
 from unittest.mock import patch
 
 import pytest
+from fastapi import routing
 from fastapi.routing import APIRoute
 
 from darla.auth.middleware import current_user
@@ -67,10 +70,40 @@ def _dependency_uses_current_user(dep) -> bool:
     return any(_dependency_uses_current_user(sub) for sub in dep.dependencies)
 
 
-def _api_routes() -> list[APIRoute]:
+@dataclass(frozen=True)
+class _Route:
+    """Effective route: full path, methods, and the dependency tree
+    including dependencies attached at ``include_router`` time."""
+
+    path: str
+    methods: frozenset[str]
+    dependant: Any
+
+
+def _api_routes() -> list[_Route]:
+    """Every ``/api/v1/`` route with its *effective* dependencies.
+
+    FastAPI >= 0.141 keeps included routers as nested ``_IncludedRouter``
+    entries instead of flattening them into ``app.routes``; the public
+    ``iter_route_contexts`` walks them the way OpenAPI generation does.
+    Older FastAPI flattens, so ``app.routes`` holds ``APIRoute`` objects
+    directly.  Without this, every check below passes vacuously on a
+    newer FastAPI — the baseline test is what caught it.
+    """
+    if hasattr(routing, "iter_route_contexts"):
+        candidates = [
+            (c.path, c.methods, getattr(c, "dependant", None))
+            for c in routing.iter_route_contexts(app.routes)
+        ]
+    else:
+        candidates = [
+            (r.path, r.methods, r.dependant)
+            for r in app.routes if isinstance(r, APIRoute)
+        ]
     return [
-        r for r in app.routes
-        if isinstance(r, APIRoute) and r.path.startswith("/api/v1/")
+        _Route(path, frozenset(methods or {"GET"}), dependant)
+        for path, methods, dependant in candidates
+        if path and path.startswith("/api/v1/") and dependant is not None
     ]
 
 
@@ -90,7 +123,7 @@ def test_route_coverage_baseline_exists():
     _api_routes(),
     ids=lambda r: f"{sorted(r.methods)[0]} {r.path}",
 )
-def test_route_is_gated_or_explicitly_anonymous(route: APIRoute):
+def test_route_is_gated_or_explicitly_anonymous(route: _Route):
     """Every API route must require ``current_user`` (directly or via
     ``require_role``) unless explicitly listed in
     :data:`ANONYMOUS_ALLOWLIST`.
