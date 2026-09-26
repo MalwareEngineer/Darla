@@ -26,9 +26,9 @@ import logging
 from datetime import UTC, datetime
 from typing import Annotated
 
+import jwt
 from fastapi import Depends, HTTPException, Request, status
-from jose import jwt
-from jose.exceptions import JWTError
+from jwt import PyJWK, PyJWTError
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.middleware.base import BaseHTTPMiddleware
@@ -91,10 +91,19 @@ async def current_user(
     # ── 2. Validate signature, iss, aud, exp ─────────────────────────
     try:
         unverified_header = jwt.get_unverified_header(token)
-    except JWTError as e:
+    except PyJWTError as e:
         raise HTTPException(
             status.HTTP_401_UNAUTHORIZED, f"Malformed token: {e}",
         ) from e
+
+    # The header's ``alg`` is attacker-controlled — check it against the
+    # server-side allowlist before it can pick a verification scheme.
+    alg = unverified_header.get("alg")
+    if alg not in settings.oidc_allowed_algorithms:
+        raise HTTPException(
+            status.HTTP_401_UNAUTHORIZED,
+            f"Token algorithm {alg!r} not allowed",
+        )
 
     kid = unverified_header.get("kid")
     if not kid:
@@ -112,15 +121,27 @@ async def current_user(
             status.HTTP_401_UNAUTHORIZED, "Token signing key not found",
         ) from e
 
+    # A JWK that declares its own ``alg`` is pinned to it (RFC 7517 §4.4).
+    key_alg = key.get("alg")
+    if key_alg and key_alg != alg:
+        raise HTTPException(
+            status.HTTP_401_UNAUTHORIZED,
+            f"Token algorithm {alg!r} does not match signing key ({key_alg!r})",
+        )
+
     try:
         claims = jwt.decode(
             token,
-            key,
-            algorithms=[unverified_header.get("alg", "RS256")],
+            PyJWK(key, algorithm=alg),
+            algorithms=settings.oidc_allowed_algorithms,
             audience=settings.oidc_audience,
             issuer=settings.oidc_issuer,
+            options={"require": ["exp", "iss", "aud"]},
         )
-    except JWTError as e:
+    except PyJWTError as e:
+        # PyJWTError is the root of every PyJWT failure — including key
+        # construction (PyJWKError) when the key type doesn't fit the
+        # algorithm, which python-jose raised outside its JWTError tree.
         raise HTTPException(
             status.HTTP_401_UNAUTHORIZED, f"Invalid token: {e}",
         ) from e

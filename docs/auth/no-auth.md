@@ -77,6 +77,14 @@ The verbosity is intentional. Nobody types that string by accident.
 "I'll just turn auth off for a quick test" trap where the container ends up
 listening on a routable interface.
 
+Under Docker Compose, `PK_BIND_ADDRESS` is also the host address the API port
+is published on (`${PK_BIND_ADDRESS}:8000:8000`), and Compose passes that same
+value into the container — so the guardrail checks exactly what Docker bound,
+even if you export a different value in your shell. Use an IP (`127.0.0.1`)
+rather than `localhost` with Compose; Docker rejects hostnames in port
+mappings, so a mistake fails closed. Postgres, Redis and RabbitMQ are always
+published on `127.0.0.1` only, regardless of mode.
+
 ### 3. Debug mode required
 
 `PK_DEBUG=true`. Setting `PK_DEBUG=false` while auth is disabled refuses
@@ -148,8 +156,8 @@ You can swap an existing no-auth deployment to authenticated mode in place:
 2. In your `.env`, change `PK_AUTH_ENABLED` to `true` and remove the
    `PK_I_UNDERSTAND_AUTH_IS_OFF` line (or leave it; it's ignored when auth is
    on). Add the four `PK_OIDC_*` variables.
-3. Change `PK_BIND_ADDRESS=0.0.0.0` so the container is reachable beyond
-   localhost.
+3. Change `PK_BIND_ADDRESS=0.0.0.0` so the API is published beyond localhost
+   (Postgres, Redis and RabbitMQ stay on `127.0.0.1`).
 4. Change `frontend/.env.local`'s `VITE_AUTH_ENABLED` to `true` and add the
    three `VITE_OIDC_*` variables.
 5. Restart the stack.
