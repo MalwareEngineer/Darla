@@ -8,6 +8,7 @@ from sqlalchemy.orm import selectinload
 
 from darla.models.investigation import Investigation, InvestigationStatus
 from darla.models.kit import Kit, KitStatus
+from darla.services.dispatch import commit_then_dispatch
 
 
 class InvestigationService:
@@ -63,7 +64,7 @@ class InvestigationService:
         from darla.tasks.analysis import build_analysis_chain
 
         chain = build_analysis_chain(str(kit.id))
-        result = chain.apply_async()
+        result = await commit_then_dispatch(self.db, chain)
 
         return investigation, kit, result.id
 

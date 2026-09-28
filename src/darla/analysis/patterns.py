@@ -98,6 +98,9 @@ BENIGN_URL_ROOT_DOMAINS = frozenset({
     "awsstatic.com",
     # CDNs
     "cloudflare.com", "cloudflare-dns.com",
+    # Cloudflare Web Analytics beacon (static.cloudflareinsights.com) —
+    # auto-injected on Cloudflare-proxied sites, including phish.
+    "cloudflareinsights.com",
     "jsdelivr.net", "unpkg.com", "cdnjs.com",
     "akamaized.net", "akamai.net", "akamaihd.net", "akamaitechnologies.com",
     "fastly.net", "fastlycdn.com",

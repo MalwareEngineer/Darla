@@ -19,6 +19,7 @@ from darla.models.associations import campaign_kits
 from darla.models.indicator import Indicator
 from darla.models.investigation import Investigation
 from darla.models.kit import Kit, KitStatus
+from darla.services.dispatch import commit_then_dispatch
 
 logger = logging.getLogger(__name__)
 
@@ -101,7 +102,7 @@ class KitService:
         from darla.tasks.analysis import build_analysis_chain
 
         chain = build_analysis_chain(str(kit.id), force=force)
-        result = chain.apply_async()
+        result = await commit_then_dispatch(self.db, chain)
         task_id = result.id
 
         return kit, task_id, False
@@ -128,7 +129,7 @@ class KitService:
         from darla.tasks.analysis import build_analysis_chain
 
         chain = build_analysis_chain(str(kit.id))
-        result = chain.apply_async()
+        result = await commit_then_dispatch(self.db, chain)
         return kit, result.id
 
     async def submit_bulk(
@@ -163,7 +164,7 @@ class KitService:
             await self.db.flush()
 
             chain = build_analysis_chain(str(kit.id))
-            task_result = chain.apply_async()
+            task_result = await commit_then_dispatch(self.db, chain)
             results.append({
                 "url": url,
                 "kit_id": kit.id,
@@ -198,7 +199,7 @@ class KitService:
             await self.db.flush()
 
             chain = build_analysis_chain(str(kit.id))
-            task_result = chain.apply_async()
+            task_result = await commit_then_dispatch(self.db, chain)
             results.append({
                 "filename": f["filename"],
                 "kit_id": kit.id,
@@ -256,7 +257,7 @@ class KitService:
         from darla.tasks.analysis import build_analysis_chain
 
         chain = build_analysis_chain(str(kit.id))
-        result = chain.apply_async()
+        result = await commit_then_dispatch(self.db, chain)
         return result.id
 
     async def _collect_descendant_ids(self, kit_id: uuid.UUID) -> list[uuid.UUID]:
