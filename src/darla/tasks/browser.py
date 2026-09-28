@@ -20,6 +20,7 @@ Dedup strategy:
 import logging
 import uuid
 from pathlib import Path
+from urllib.parse import urlparse
 
 from sqlalchemy import func, or_
 
@@ -249,6 +250,36 @@ def find_redundant_render_reason(db, kit: Kit, sha256: str | None) -> str | None
             )
 
     return None
+
+
+def _known_landing_hosts(db, kit: Kit) -> set[str]:
+    """Hosts *kit* is known to land on without any relay rotation: its own
+    host plus every host on its recorded HTTP redirect chain."""
+    from darla.models.analysis_result import AnalysisResult, AnalysisType
+
+    hosts = {urlparse(kit.source_url).hostname}
+    chain = db.query(AnalysisResult.result_data).filter(
+        AnalysisResult.kit_id == kit.id,
+        AnalysisResult.analysis_type == AnalysisType.REDIRECT_CHAIN,
+    ).scalar()
+    if chain:
+        urls = [chain.get("final_url")]
+        for hop in chain.get("hops") or []:
+            urls += [hop.get("url"), hop.get("location")]
+        hosts |= {urlparse(u).hostname for u in urls if u}
+    hosts.discard(None)
+    return hosts
+
+
+def _complete_investigation_if_done(db, kit: Kit) -> None:
+    """Run the investigation-completion check for a render that ended as a
+    duplicate.  Those never reach ``finalize_kit``, so when one is the last
+    kit to finish, the investigation otherwise sits IN_PROGRESS until the
+    hourly recovery sweep."""
+    if kit.investigation_id:
+        from darla.tasks.analysis import _try_complete_investigation
+
+        _try_complete_investigation(db, kit.investigation_id)
 
 
 def _walk_ancestor_chain(db, kit: Kit, max_depth: int = 5) -> list[Kit]:
@@ -546,7 +577,7 @@ def browser_download_kit(
         # in the wild on volgograd-consalting / digitaltrustlayer kits.
         # Both the redirect_uri and the original lure URL can carry it.
         if final_url:
-            from urllib.parse import unquote, urlparse
+            from urllib.parse import unquote
 
             from darla.models.indicator import Indicator, IndicatorType
             from darla.models.victim import VictimObservationSource
@@ -713,6 +744,7 @@ def browser_download_kit(
             if stuck_at_gate:
                 # Stuck at a protection gate — re-rendering the same
                 # parent won't help.  Don't schedule another attempt.
+                _complete_investigation_if_done(db, child_kit)
                 return {
                     "kit_id": child_id,
                     "parent_kit_id": kit_id,
@@ -739,6 +771,9 @@ def browser_download_kit(
                         "Kit %s: pool-enum re-dispatch suppressed — %s",
                         kit_id, skip_reason,
                     )
+            # After the re-dispatch decision, so a just-precreated render
+            # (DOWNLOADING) keeps the investigation open.
+            _complete_investigation_if_done(db, child_kit)
             return {
                 "kit_id": child_id,
                 "parent_kit_id": kit_id,
@@ -776,13 +811,14 @@ def browser_download_kit(
 
         # Re-render to discover more relay variations (reset dupe counter),
         # but only if the browser redirected to a different domain (relay
-        # rotation).  If the final URL stays on the lure domain there's no
+        # rotation).  If the final URL stays on the lure domain — or on a
+        # host the parent's plain-HTTP redirect chain already reached, as
+        # with an email click-tracker in front of the phish — there's no
         # relay pool to enumerate.  Subject to the per-investigation
         # in-flight budget so a single adversarial kit can't dominate the
         # browser worker.
-        lure_domain = urlparse(parent_kit.source_url).hostname
         final_domain = urlparse(final_url).hostname if final_url else None
-        if final_domain and final_domain != lure_domain:
+        if final_domain and final_domain not in _known_landing_hosts(db, parent_kit):
             next_child, skip_reason = (
                 precreate_browser_render_child_kit(db, parent_kit)
             )

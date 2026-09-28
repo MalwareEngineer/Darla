@@ -324,6 +324,13 @@ class ExternalJSFetcher:
         if not path or path.endswith("/"):
             return "terminal"
 
+        # A script extension on any segment marks a script resource, even
+        # with a version suffix after it (Cloudflare's
+        # /beacon.min.js/v31edd6df…) — never a landing page.
+        segments = [seg for seg in path.split("/") if seg]
+        if any(seg.endswith(tuple(_JS_EXTENSIONS)) for seg in segments[:-1]):
+            return "js"
+
         # Explicit extension tells us directly
         last_dot = path.rfind(".")
         if last_dot > path.rfind("/"):
