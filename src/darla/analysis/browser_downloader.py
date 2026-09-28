@@ -1208,6 +1208,61 @@ async def _simulate_human_behavior(page) -> None:
         pass
 
 
+# Fields a lure uses to ask "which email got the document?".  Case-
+# insensitive attribute matches cover name="userEmail", id="mail", etc.
+_EMAIL_GATE_SELECTOR = (
+    'input[type="email"], input[autocomplete="email"], '
+    'input[autocomplete="username"], input[name*="mail" i], '
+    'input[id*="mail" i], input[placeholder*="mail" i]'
+)
+_TEXT_INPUT_TYPES = {"", "text", "email"}
+
+
+GATE_NONE, GATE_FILLED, GATE_UNFILLED = "none", "filled", "unfilled"
+
+
+async def _fill_email_gate(page) -> str:
+    """Type the honey credential into a visible, empty email field.
+
+    Email-gated lures validate the address server-side against the one the
+    lure was sent to; clicking "Continue" on an empty field only earns
+    "Please enter the correct email." and the credential page is never
+    captured.  Returns ``GATE_FILLED``, ``GATE_NONE`` (no gate), or
+    ``GATE_UNFILLED`` (gate present, no ``PK_HONEY_EMAIL`` configured —
+    the caller must not submit it blank).
+    """
+    from darla.config import get_settings
+
+    honey_email = get_settings().honey_email
+    try:
+        fields = await page.query_selector_all(_EMAIL_GATE_SELECTOR)
+    except Exception:
+        return GATE_NONE
+    for field in fields:
+        try:
+            input_type = (await field.get_attribute("type") or "").lower()
+            if input_type not in _TEXT_INPUT_TYPES:
+                continue
+            if not await field.is_visible() or not await field.is_editable():
+                continue
+            if (await field.input_value()).strip():
+                continue
+            if not honey_email:
+                logger.info(
+                    "Lure email gate detected but PK_HONEY_EMAIL is unset — "
+                    "not submitting it",
+                )
+                return GATE_UNFILLED
+            await field.click()
+            await field.type(honey_email, delay=random.randint(40, 110))
+            await asyncio.sleep(random.uniform(0.3, 0.8))
+            logger.info("Filled lure email gate with the honey credential")
+            return GATE_FILLED
+        except Exception:
+            continue
+    return GATE_NONE
+
+
 async def _click_lure_cta(page) -> bool:
     """Click a prominent CTA button/link that gates the real phishing content.
 
@@ -1215,9 +1270,15 @@ async def _click_lure_cta(page) -> bool:
     - Post-Turnstile voicemail/device-code phish ("Verify to Play")
     - QR code landing pages ("Open Document Here", "View PDF")
     - Generic click-through lures ("Continue", "Proceed")
+    - Email gates ("Enter the email that got the document") — the honey
+      credential is typed first, then the CTA (or Enter) submits it
 
-    Returns True if a CTA was found and clicked.
+    Returns True if a CTA was found and clicked (or a filled gate submitted).
     """
+    gate = await _fill_email_gate(page)
+    if gate == GATE_UNFILLED:
+        return False
+    email_filled = gate == GATE_FILLED
     try:
         cta = await page.evaluate("""
             () => {
@@ -1262,6 +1323,13 @@ async def _click_lure_cta(page) -> bool:
         """)
 
         if not cta:
+            if email_filled:
+                # Gate without a recognised button ("Next", an icon, ...):
+                # submit the form the way a user would.
+                await page.keyboard.press("Enter")
+                with contextlib.suppress(TimeoutError, Exception):
+                    await page.wait_for_load_state("domcontentloaded", timeout=10_000)
+                return True
             return False
 
         logger.info("Lure CTA detected: %r (selector=%s)", cta["text"], cta["selector"])
