@@ -235,6 +235,25 @@ services:
         condition: service_healthy
       rabbitmq:
         condition: service_healthy
+      egress-proxy:
+        condition: service_healthy
+
+  # SOCKS5 egress proxy for the browser worker (SSRF layer 2, see
+  # src/darla/egress_proxy.py).  Used when PK_BROWSER_EGRESS_PROXY is set
+  # to socks5://egress-proxy:1080.  Deliberately gets no env_file and no
+  # published port: it holds no credentials and is reachable only on the
+  # compose network.
+  egress-proxy:
+    build: .
+    command: python -m darla.egress_proxy --host 0.0.0.0 --port 1080
+    environment:
+      PK_EGRESS_ALLOW_CIDRS: ${PK_EGRESS_ALLOW_CIDRS:-[]}
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import socket; socket.create_connection(('127.0.0.1', 1080), 2)"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
 
 volumes:
   pgdata:

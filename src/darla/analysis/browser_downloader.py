@@ -568,6 +568,8 @@ async def _async_browser_download(
     """
     try:
         from camoufox.async_api import AsyncCamoufox
+
+        from darla.utils.egress import camoufox_egress_kwargs
     except ImportError:
         return None, "camoufox not installed (pip install darla[browser])", None
 
@@ -694,6 +696,7 @@ async def _async_browser_download(
 
     try:
         async with AsyncCamoufox(
+            **camoufox_egress_kwargs(),
             headless="virtual",
             humanize=True,
             block_webrtc=True,

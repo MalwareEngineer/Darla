@@ -180,6 +180,40 @@ def guarded_async_transport(**kwargs) -> httpx.AsyncHTTPTransport:
     return transport
 
 
+_warned_unguarded_browser = False
+
+
+def camoufox_egress_kwargs() -> dict:
+    """Extra ``AsyncCamoufox`` kwargs routing the browser through the
+    egress proxy, or ``{}`` when ``PK_BROWSER_EGRESS_PROXY`` is unset.
+
+    The prefs close Firefox's built-in proxy bypasses: requests to
+    localhost / 127.0.0.1 skip any proxy unless hijacking is allowed, and
+    ``no_proxies_on`` must be empty.  Remote DNS makes the proxy — not
+    the browser — resolve names, so the vetted address is the one used.
+    """
+    global _warned_unguarded_browser
+    proxy = get_settings().browser_egress_proxy
+    if not proxy:
+        if not _warned_unguarded_browser:
+            import logging
+
+            logging.getLogger(__name__).warning(
+                "PK_BROWSER_EGRESS_PROXY is unset — browser renders are not "
+                "covered by the SSRF egress guard",
+            )
+            _warned_unguarded_browser = True
+        return {}
+    return {
+        "proxy": {"server": proxy},
+        "firefox_user_prefs": {
+            "network.proxy.allow_hijacking_localhost": True,
+            "network.proxy.no_proxies_on": "",
+            "network.proxy.socks_remote_dns": True,
+        },
+    }
+
+
 def egress_block_reason(exc: BaseException) -> str | None:
     """The block message if *exc* is an egress block, else ``None``."""
     message = str(exc)
