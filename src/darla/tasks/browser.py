@@ -510,7 +510,7 @@ def browser_download_kit(
         download_dir = Path(settings.kit_download_dir) / child_id
         download_dir.mkdir(parents=True, exist_ok=True)
 
-        filepath, reason, final_url = browser_download(
+        filepath, reason, final_url, interaction_driven = browser_download(
             parent_kit.source_url,
             str(download_dir),
             timeout=settings.browser_download_timeout,
@@ -810,15 +810,23 @@ def browser_download_kit(
         build_post_download_chain(download_result).apply_async()
 
         # Re-render to discover more relay variations (reset dupe counter),
-        # but only if the browser redirected to a different domain (relay
-        # rotation).  If the final URL stays on the lure domain — or on a
-        # host the parent's plain-HTTP redirect chain already reached, as
-        # with an email click-tracker in front of the phish — there's no
-        # relay pool to enumerate.  Subject to the per-investigation
-        # in-flight budget so a single adversarial kit can't dominate the
-        # browser worker.
+        # but only if the browser reached a different domain by a *passive*
+        # relay redirect.  Skip when:
+        #  - the final URL stays on the lure domain, or on a host the
+        #    parent's plain-HTTP redirect chain already reached (email
+        #    click-tracker in front of the phish), or
+        #  - the final domain was reached by interaction (a CTA click or
+        #    email-gate fill) — that path is deterministic and re-rendering
+        #    just reproduces the same landing (the wasted duplicate
+        #    render seen on email-gate lures), not a rotating pool.
+        # Subject to the per-investigation in-flight budget so a single
+        # adversarial kit can't dominate the browser worker.
         final_domain = urlparse(final_url).hostname if final_url else None
-        if final_domain and final_domain not in _known_landing_hosts(db, parent_kit):
+        if (
+            final_domain
+            and not interaction_driven
+            and final_domain not in _known_landing_hosts(db, parent_kit)
+        ):
             next_child, skip_reason = (
                 precreate_browser_render_child_kit(db, parent_kit)
             )

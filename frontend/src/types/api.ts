@@ -141,6 +141,9 @@ export interface InvestigationTreeNode {
   discovery_method?: string;
   chain_depth: number;
   children: InvestigationTreeNode[];
+  // For browser_render kits: ordered hosts the render navigated through
+  // (lure → gate → credential page), which the single node collapses.
+  nav_path?: string[] | null;
 }
 
 export interface InvestigationSubmitResponse {
