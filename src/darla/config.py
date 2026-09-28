@@ -59,6 +59,13 @@ class Settings(BaseSettings):
     # "socks5://egress-proxy:1080".  Empty = the browser connects directly
     # and is NOT covered by the SSRF guard.
     browser_egress_proxy: str = ""
+    # Honey credential typed into lure email gates ("Enter the email that
+    # got the document") so the render reaches the credential page.  Kits
+    # validate server-side against the address the lure was sent to, so
+    # this must be the honeypot mailbox that received the lures.  Set only
+    # in the gitignored .env; empty = gates are detected and logged, never
+    # submitted blank.
+    honey_email: str = ""
     browser_turnstile_timeout: int = 30  # seconds before retrying Turnstile with fresh context
     browser_render_on_thin_results: bool = True
     browser_dedup_tlsh_threshold: int = 30
