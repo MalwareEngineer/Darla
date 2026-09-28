@@ -12,6 +12,7 @@ from darla.database import get_sync_db
 from darla.models.analysis_result import AnalysisType
 from darla.models.kit import Kit, KitStatus
 from darla.tasks.analysis import upsert_analysis_result
+from darla.utils.egress import BLOCK_PREFIX as EGRESS_BLOCK_PREFIX
 from darla.utils.http_client import download_file
 
 logger = logging.getLogger(__name__)
@@ -269,7 +270,9 @@ def download_kit(
                 is_cloudflare_challenge,
             )
 
-            should_browser_retry = (
+            # Never hand an egress-blocked destination to the browser —
+            # Camoufox isn't behind the connect-time guard.
+            should_browser_retry = not reason.startswith(EGRESS_BLOCK_PREFIX) and (
                 is_cloudflare_challenge(reason)
                 or is_oauth_authorize_url(kit.source_url)
             )

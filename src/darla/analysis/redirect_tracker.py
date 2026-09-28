@@ -13,6 +13,7 @@ from urllib.parse import urljoin, urlparse
 import httpx
 
 from darla.config import get_settings
+from darla.utils.egress import egress_block_reason, guarded_transport
 from darla.utils.http_client import _extract_filename, _random_headers
 
 logger = logging.getLogger(__name__)
@@ -209,6 +210,8 @@ class RedirectTracker:
                 headers=_random_headers(),
                 timeout=settings.download_timeout,
                 follow_redirects=False,
+                # Every hop's connection is checked (darla.utils.egress).
+                transport=guarded_transport(),
             ) as client:
                 # Follow redirects manually
                 for _ in range(MAX_REDIRECTS):
@@ -291,7 +294,12 @@ class RedirectTracker:
             chain.final_url = current_url
             return None, "Connection timed out", chain
         except httpx.RequestError as e:
+            # A blocked hop keeps final_url = the internal target the lure
+            # tried to reach — recorded in the redirect chain as evidence.
             chain.final_url = current_url
+            if blocked := egress_block_reason(e):
+                logger.warning("Blocked redirect hop %s: %s", current_url, blocked)
+                return None, blocked, chain
             return None, f"Request error: {type(e).__name__}", chain
         except Exception as e:
             chain.final_url = current_url
