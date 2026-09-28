@@ -1,5 +1,6 @@
 """Investigation API endpoints."""
 
+import json
 import uuid
 from pathlib import Path
 
@@ -261,6 +262,39 @@ async def get_investigation_kits(
     }
 
 
+def _render_nav_path(kit) -> list[str] | None:
+    """Ordered distinct hosts a browser_render navigated through.
+
+    Read from the render's persisted ``requests.json`` (a sibling of the
+    kit's ``page.html``): the document-request URLs, in order, reduced to
+    consecutive-distinct hostnames.  Returns None when unavailable — best
+    effort for the tree view, never fatal.  Only ≥2-hop paths are worth
+    showing (a single hop is just the node's own URL).
+    """
+    if kit.discovery_method != "browser_render" or not kit.local_path:
+        return None
+    from urllib.parse import urlparse
+
+    log_path = Path(kit.local_path).parent / "requests.json"
+    try:
+        if not log_path.is_file() or log_path.stat().st_size > 8_000_000:
+            return None
+        entries = json.loads(log_path.read_text(encoding="utf-8", errors="replace"))
+    except (OSError, ValueError):
+        return None
+
+    hosts: list[str] = []
+    for e in entries if isinstance(entries, list) else []:
+        if not isinstance(e, dict):
+            continue
+        if e.get("type") != "request" or e.get("resource_type") != "document":
+            continue
+        host = urlparse(e.get("url") or "").hostname
+        if host and (not hosts or hosts[-1] != host):
+            hosts.append(host)
+    return hosts if len(hosts) >= 2 else None
+
+
 def _build_tree(kits: list) -> list[InvestigationTreeNode]:
     """Build a tree of InvestigationTreeNode from a flat list of kits."""
     nodes: dict[uuid.UUID, InvestigationTreeNode] = {}
@@ -271,6 +305,7 @@ def _build_tree(kits: list) -> list[InvestigationTreeNode]:
             kit=KitSummary.model_validate(kit),
             discovery_method=kit.discovery_method,
             chain_depth=kit.chain_depth,
+            nav_path=_render_nav_path(kit),
         )
         nodes[kit.id] = node
 

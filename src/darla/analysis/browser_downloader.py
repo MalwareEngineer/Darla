@@ -532,6 +532,67 @@ async def _register_cloak_routes(page) -> None:
             )
 
 
+# Text that marks an interstitial/loading state rather than final content.
+# Presence keeps the settle loop waiting; it never forces a capture.
+_LOADING_MARKERS = (
+    "preparing secure session", "please wait", "just a moment", "one moment",
+    "redirecting", "loading", "checking your browser", "one last check",
+    "checking...", "verifying", "initializing", "processing your request",
+)
+
+
+async def _settle_final_page(
+    page,
+    *,
+    max_seconds: float = 30.0,
+    interval: float = 2.5,
+    stable_needed: int = 2,
+) -> None:
+    """Wait until the page holds still, then return so the caller captures.
+
+    Declares the page settled after ``stable_needed`` consecutive checks
+    with no URL change, no meaningful content-length change, and no
+    loading-marker text.  A URL change (post-gate redirect / relay hop),
+    a content rewrite (fetch→document.write), or a visible spinner each
+    reset the streak.  Bounded by ``max_seconds`` so a page that animates
+    forever is still captured best-effort.
+    """
+    deadline = asyncio.get_event_loop().time() + max_seconds
+    prev_url: str | None = None
+    prev_len = -1
+    streak = 0
+    saw_loading = False
+    while asyncio.get_event_loop().time() < deadline:
+        await asyncio.sleep(interval)
+        try:
+            url = page.url
+            content = await page.content()
+        except Exception:
+            # Navigation in flight — the page is clearly not settled yet.
+            streak = 0
+            continue
+        text = content[:4000].lower()
+        loading = any(m in text for m in _LOADING_MARKERS)
+        saw_loading = saw_loading or loading
+        changed = url != prev_url or abs(len(content) - prev_len) > 64
+        prev_url, prev_len = url, len(content)
+        if changed or loading:
+            streak = 0
+            continue
+        streak += 1
+        if streak >= stable_needed:
+            break
+    else:
+        logger.info(
+            "Page did not fully settle within %.0fs%s — capturing anyway",
+            max_seconds,
+            " (still showing a loading state)" if saw_loading else "",
+        )
+    # Let any resources from the last change finish.
+    with contextlib.suppress(TimeoutError, Exception):
+        await asyncio.wait_for(page.wait_for_load_state("networkidle"), timeout=8)
+
+
 async def _take_screenshot(page, screenshots_dir: Path, stage: str) -> Path | None:
     """Take a screenshot and save it with a stage label."""
     try:
@@ -550,7 +611,7 @@ async def _async_browser_download(
     dest_dir: str,
     timeout: int = 60,
     turnstile_timeout: int = 30,
-) -> tuple[Path | None, str, str | None]:
+) -> tuple[Path | None, str, str | None, bool]:
     """Internal async implementation of the browser download.
 
     Captures ALL network responses (JS, PHP, CSS, XHR, fetch) plus
@@ -571,7 +632,7 @@ async def _async_browser_download(
 
         from darla.utils.egress import camoufox_egress_kwargs
     except ImportError:
-        return None, "camoufox not installed (pip install darla[browser])", None
+        return None, "camoufox not installed (pip install darla[browser])", None, False
 
     dest_path = Path(dest_dir)
     dest_path.mkdir(parents=True, exist_ok=True)
@@ -732,7 +793,7 @@ async def _async_browser_download(
             response = await page.goto(url, wait_until="domcontentloaded")
 
             if not response and not is_file_url:
-                return None, "Browser navigation returned no response", None
+                return None, "Browser navigation returned no response", None, False
 
             # Give JS deobfuscation / eval layers time to execute
             await asyncio.sleep(random.uniform(3.0, 5.0))
@@ -830,42 +891,14 @@ async def _async_browser_download(
                     timeout=15,
                 )
 
-            # Extra settle time for SPAs that render after networkidle
-            # (e.g. MS login page clones loading SVG backgrounds).
-            await asyncio.sleep(random.uniform(2.0, 4.0))
-
-            # Check if the current page is a JS loader stub that will
-            # rewrite itself (e.g. fetch→atob→document.write).  If so,
-            # poll until the content changes or we run out of patience.
-            pre_capture = await page.content()
-            if len(pre_capture) < 5000:
-                lower = pre_capture.lower()
-                has_rewrite = any(m in lower for m in [
-                    "document.write", "atob(", "eval(", ".innerhtml",
-                ])
-                if has_rewrite:
-                    logger.info(
-                        "Page looks like JS loader stub (%d bytes), "
-                        "polling for content change",
-                        len(pre_capture),
-                    )
-                    snapshot = pre_capture
-                    for _ in range(6):  # up to 30s (6 × 5s)
-                        await asyncio.sleep(5)
-                        current = await page.content()
-                        if current != snapshot:
-                            logger.info(
-                                "JS loader content changed (%d → %d bytes)",
-                                len(snapshot), len(current),
-                            )
-                            # Let post-rewrite resources settle
-                            with contextlib.suppress(TimeoutError, Exception):
-                                await asyncio.wait_for(
-                                    page.wait_for_load_state("networkidle"),
-                                    timeout=10,
-                                )
-                            await asyncio.sleep(random.uniform(1.0, 2.0))
-                            break
+            # Poll until the page stops changing before capturing.  This
+            # replaces a fixed sleep + a narrow JS-loader-stub check that
+            # missed interstitials which are large or lack document.write
+            # (spinner pages, "Preparing secure session", "Checking…",
+            # post-email-gate redirects, framework SPAs).  Stability-based
+            # so it needs no phish-specific markers; loading text only
+            # extends patience.
+            await _settle_final_page(page)
 
             # Screenshot: final phishing page (stage 3)
             await _take_screenshot(page, screenshots_dir, "03_phish")
@@ -875,7 +908,7 @@ async def _async_browser_download(
             final_url = page.url
 
             if not content or len(content) < 100:
-                return None, "Browser captured empty or minimal page content", None
+                return None, "Browser captured empty or minimal page content", None, False
 
             # Save HTML to disk
             filename = "page.html"
@@ -1062,11 +1095,14 @@ async def _async_browser_download(
                 len(content), url, final_url,
                 saved_resources, len(network_log),
             )
-            return filepath, "ok", final_url
+            # cta_clicked is True when a CTA was clicked and/or the
+            # email gate was filled — i.e. the final domain was
+            # reached by interaction, not a passive relay redirect.
+            return filepath, "ok", final_url, cta_clicked
 
     except Exception as e:
         logger.error("Browser download failed for %s: %s", url, e)
-        return None, f"Browser error: {type(e).__name__}: {e}", None
+        return None, f"Browser error: {type(e).__name__}: {e}", None, False
 
 
 async def _wait_for_turnstile(page, timeout: int = 30) -> str:
@@ -1969,12 +2005,14 @@ def browser_download(
     dest_dir: str,
     timeout: int = 60,
     turnstile_timeout: int = 30,
-) -> tuple[Path | None, str, str | None]:
+) -> tuple[Path | None, str, str | None, bool]:
     """Download a URL using a stealth browser (Camoufox).
 
     Synchronous wrapper around the async implementation for use in
-    Celery tasks.  Returns ``(filepath, reason, final_url)`` — the
-    final URL is the browser's location after all redirects/gates.
+    Celery tasks.  Returns ``(filepath, reason, final_url,
+    interaction_driven)`` — final URL is the browser's location after
+    all redirects/gates; interaction_driven is True when a CTA/gate
+    was engaged to reach it (so it is not relay rotation).
 
     In addition to page.html, saves:
     - ``_browser_resources/`` — captured JS, PHP, CSS, XHR responses
@@ -1982,7 +2020,7 @@ def browser_download(
     - ``requests.json`` — full network request/response log
     """
     if not _is_available():
-        return None, "camoufox not installed (pip install darla[browser])", None
+        return None, "camoufox not installed (pip install darla[browser])", None, False
 
     # Hard wall-clock deadline: timeout + turnstile_timeout + 60s buffer.
     # Buffer accounts for CTA click-through (detection + click + post-click
@@ -2005,10 +2043,10 @@ def browser_download(
             "Browser download hard timeout after %.1fs (limit %ds)",
             elapsed, hard_timeout,
         )
-        return None, f"Browser hard timeout after {hard_timeout}s", None
+        return None, f"Browser hard timeout after {hard_timeout}s", None, False
     except Exception as e:
         elapsed = time.monotonic() - start
         logger.error("Browser download wrapper failed after %.1fs: %s", elapsed, e)
-        return None, f"Browser error: {type(e).__name__}: {e}", None
+        return None, f"Browser error: {type(e).__name__}: {e}", None, False
     finally:
         loop.close()

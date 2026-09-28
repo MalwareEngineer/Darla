@@ -152,6 +152,21 @@ function TreeNodeView({ node, depth }: { node: InvestigationTreeNode; depth: num
           </Badge>
         )}
       </div>
+      {node.nav_path && node.nav_path.length > 1 && (
+        <div
+          className="flex items-center gap-1 flex-wrap text-[10px] text-muted-foreground font-mono py-0.5"
+          style={{ paddingLeft: `${depth * 24 + 28}px` }}
+          title="Hosts the browser navigated through during this render"
+        >
+          <span className="text-muted-foreground/70">via</span>
+          {node.nav_path.map((host, i) => (
+            <span key={`${host}-${i}`} className="flex items-center gap-1">
+              {i > 0 && <span className="text-muted-foreground/50">→</span>}
+              <span>{host}</span>
+            </span>
+          ))}
+        </div>
+      )}
       {node.children.map((child) => (
         <TreeNodeView key={child.kit.id} node={child} depth={depth + 1} />
       ))}

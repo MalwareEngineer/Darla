@@ -45,6 +45,11 @@ class InvestigationTreeNode(BaseModel):
     discovery_method: str | None = None
     chain_depth: int = 0
     children: list["InvestigationTreeNode"] = []
+    # For browser_render kits: ordered distinct hosts the browser navigated
+    # through during the render (lure → gate → credential page).  A render
+    # is stored as one node whose URL is only its final landing, so this
+    # shows the steps the single node collapsed.  None for non-render kits.
+    nav_path: list[str] | None = None
 
     model_config = {"from_attributes": True}
 
