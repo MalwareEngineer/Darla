@@ -465,11 +465,11 @@ def extract_archive(self, prev_result: dict) -> dict:
         db.close()
 
 
-def _looks_like_html(filepath: Path) -> bool:
-    """Sniff first 512 bytes for HTML markers (extension-agnostic)."""
+def _looks_like_html(filepath: Path, limit: int = 512) -> bool:
+    """Sniff the first *limit* bytes for HTML markers (extension-agnostic)."""
     try:
         with open(filepath, "rb") as f:
-            head = f.read(512).lower()
+            head = f.read(limit).lower()
         return any(marker in head for marker in (
             b"<!doctype", b"<html", b"<head", b"<body", b"<script",
         ))
@@ -1591,17 +1591,22 @@ def finalize_kit(self, prev_result: dict) -> dict:
             settings.browser_download_enabled
             and settings.browser_render_on_thin_results
             and not prev_result.get("browser_render_dispatched")
+            # A browser render *is* the render — re-rendering the same URL
+            # only ends as "stuck at gate" after a 60-150 s browser slot.
+            and kit.discovery_method != "browser_render"
         ):
             iocs_extracted = prev_result.get("iocs_extracted", 0)
             yara_count = len(prev_result.get("yara_matches", []))
             is_thin = iocs_extracted <= 1 and yara_count == 0
 
-            mime = kit.mime_type or ""
-            is_html_like = mime in (
-                "text/html", "application/octet-stream",
-            ) or (
-                kit.filename
-                and kit.filename.endswith((".html", ".htm", ".bin"))
+            # MIME/extension alone mislabels extensionless downloads — a
+            # script served from /beacon.min.js/v31… arrives as
+            # octet-stream — so anything not declared HTML must sniff as
+            # HTML (4 KB window: lure pages can open with long comments).
+            is_html_like = (
+                kit.mime_type == "text/html"
+                or bool(kit.filename and kit.filename.lower().endswith((".html", ".htm")))
+                or bool(kit.local_path and _looks_like_html(Path(kit.local_path), 4096))
             )
 
             has_browser_child = db.query(Kit).filter(

@@ -239,6 +239,8 @@ async def _execute_svg_async(
 
     try:
         from camoufox.async_api import AsyncCamoufox
+
+        from darla.utils.egress import camoufox_egress_kwargs
     except ImportError:
         result.status = "camoufox_missing"
         result.error = "camoufox not installed (pip install darla[browser])"
@@ -332,6 +334,7 @@ async def _execute_svg_async(
 
     try:
         async with AsyncCamoufox(
+            **camoufox_egress_kwargs(),
             headless="virtual",
             humanize=False,
             block_webrtc=True,

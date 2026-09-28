@@ -77,13 +77,15 @@ class ChainCrawler:
 
             child_ids.append(kit.id)
 
-            # Dispatch the full analysis chain for this child kit
-            build_analysis_chain(str(kit.id)).apply_async()
-
             logger.info(
                 "Spawned child kit %s (depth=%d, method=%s, score=%.2f): %s",
                 kit.id, current_depth + 1, link.source, link.score, link.url,
             )
 
+        # Commit before dispatching: a worker that dequeues a chain before
+        # the row is visible fails with "Kit ... not found" and burns its
+        # only retry.
         self.db.commit()
+        for child_id in child_ids:
+            build_analysis_chain(str(child_id)).apply_async()
         return child_ids

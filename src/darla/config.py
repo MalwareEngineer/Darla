@@ -55,6 +55,10 @@ class Settings(BaseSettings):
     # Browser-based downloading (Camoufox stealth browser fallback)
     browser_download_enabled: bool = False
     browser_download_timeout: int = 60
+    # SOCKS5 egress proxy for Camoufox (darla.egress_proxy), e.g.
+    # "socks5://egress-proxy:1080".  Empty = the browser connects directly
+    # and is NOT covered by the SSRF guard.
+    browser_egress_proxy: str = ""
     # Honey credential typed into lure email gates ("Enter the email that
     # got the document") so the render reaches the credential page.  Kits
     # validate server-side against the address the lure was sent to, so
@@ -72,10 +76,12 @@ class Settings(BaseSettings):
     # legitimate variations beyond the cap.
     browser_render_max_variations: int = 10
     # Consecutive TLSH-duplicate renders before stopping the pool-enum
-    # loop.  At 2 we exit after the second confirmed dupe, which in
-    # practice is when pools have exhausted.  3 wasted ~33% extra
-    # browser time on diminishing-returns enumeration.
-    browser_render_pool_stop: int = 2
+    # loop.  At 1 we stop on the first duplicate: a near-duplicate render
+    # means the pool isn't yielding new content, and per-render token
+    # variation within one tree isn't worth a 60-150 s browser slot —
+    # kit variation is compared across submissions (PhishDiff) instead.
+    # (2 cost an extra confirming render per lure; 3 wasted ~33% more.)
+    browser_render_pool_stop: int = 1
     # Per-investigation in-flight browser-render budget.  Before
     # dispatching another browser_download_kit (e.g. pool enumeration),
     # we count DOWNLOADING children for the same investigation; if this
