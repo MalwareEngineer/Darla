@@ -10,6 +10,11 @@ import redis
 
 from darla.config import get_settings
 from darla.private_config import load_user_agents
+from darla.utils.egress import (
+    egress_block_reason,
+    guarded_async_transport,
+    guarded_transport,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -29,12 +34,17 @@ def _random_headers() -> dict[str, str]:
 
 
 def get_sync_client(**kwargs) -> httpx.Client:
-    """Get a configured sync HTTP client for use in Celery tasks."""
+    """Get a configured sync HTTP client for use in Celery tasks.
+
+    Connections go through the egress guard (darla.utils.egress): only
+    public addresses, checked at connect time on every redirect hop.
+    """
     settings = get_settings()
     defaults = {
         "headers": _random_headers(),
         "timeout": settings.download_timeout,
         "follow_redirects": True,
+        "transport": guarded_transport(),
     }
     defaults.update(kwargs)
     return httpx.Client(**defaults)
@@ -92,12 +102,13 @@ def fetch_with_cache(
 
 
 async def get_async_client(**kwargs) -> httpx.AsyncClient:
-    """Get a configured async HTTP client."""
+    """Get a configured async HTTP client (egress-guarded, like the sync one)."""
     settings = get_settings()
     defaults = {
         "headers": _random_headers(),
         "timeout": settings.download_timeout,
         "follow_redirects": True,
+        "transport": guarded_async_transport(),
     }
     defaults.update(kwargs)
     return httpx.AsyncClient(**defaults)
@@ -149,6 +160,9 @@ def download_file(
         logger.error("Timeout downloading %s: %s", url, e)
         return None, "Connection timed out"
     except httpx.RequestError as e:
+        if blocked := egress_block_reason(e):
+            logger.warning("Blocked download of %s: %s", url, blocked)
+            return None, blocked
         logger.error("Request error downloading %s: %s", url, e)
         return None, f"Request error: {type(e).__name__}"
     except Exception as e:

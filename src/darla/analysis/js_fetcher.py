@@ -12,7 +12,6 @@ import hashlib
 import json
 import logging
 import re
-import socket
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -22,6 +21,7 @@ from darla.analysis.patterns import (
     extract_root_domain,
     is_benign_url,
 )
+from darla.utils.egress import egress_block_reason
 from darla.utils.http_client import get_sync_client
 
 logger = logging.getLogger(__name__)
@@ -100,25 +100,6 @@ class JSFetchResult:
     # URLs that look like HTML landing pages rather than JS resources.
     # These are hand-offs for the chain crawler to spawn child kits from.
     terminal_urls: list[str] = field(default_factory=list)
-
-
-def _is_private_ip(hostname: str) -> bool:
-    """Check if a hostname resolves to a private/loopback IP (SSRF guard)."""
-    try:
-        for _family, _, _, _, sockaddr in socket.getaddrinfo(hostname, None):
-            ip = sockaddr[0]
-            if ip.startswith(("10.", "192.168.", "127.", "0.",
-                              "172.16.", "172.17.", "172.18.", "172.19.",
-                              "172.20.", "172.21.", "172.22.", "172.23.",
-                              "172.24.", "172.25.", "172.26.", "172.27.",
-                              "172.28.", "172.29.", "172.30.", "172.31.",
-                              "169.254.")):
-                return True
-            if ip == "::1" or ip.startswith("fe80:") or ip.startswith("fc") or ip.startswith("fd"):
-                return True
-    except (socket.gaierror, OSError):
-        return False  # DNS failure — not private, but fetch will fail anyway
-    return False
 
 
 def _sanitize_filename(url: str) -> str:
@@ -390,16 +371,8 @@ class ExternalJSFetcher:
         """Fetch a URL and save it to the JS output directory."""
         self._fetched_urls.add(url)
 
-        # SSRF guard: check for private IPs
-        try:
-            hostname = urlparse(url).hostname
-            if hostname and _is_private_ip(hostname):
-                logger.debug("Skipping private IP for %s", url)
-                result.errors.append(f"private_ip:{url}")
-                result.files_skipped_error += 1
-                return None
-        except Exception:
-            pass
+        # SSRF: get_sync_client's transport refuses non-public destinations
+        # at connect time, on every redirect hop (darla.utils.egress).
 
         try:
             with get_sync_client(timeout=self._timeout) as client:
@@ -465,8 +438,12 @@ class ExternalJSFetcher:
             return dest
 
         except Exception as e:
-            logger.debug("Failed to fetch external JS %s: %s", url, e)
-            result.errors.append(f"fetch_error:{url}:{e}")
+            if egress_block_reason(e):
+                logger.debug("Skipping non-public destination for %s: %s", url, e)
+                result.errors.append(f"private_ip:{url}")
+            else:
+                logger.debug("Failed to fetch external JS %s: %s", url, e)
+                result.errors.append(f"fetch_error:{url}:{e}")
             result.files_skipped_error += 1
             return None
 

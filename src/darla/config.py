@@ -1,7 +1,9 @@
 """Application configuration via pydantic-settings."""
 
+import ipaddress
 from functools import lru_cache
 
+from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -42,6 +44,11 @@ class Settings(BaseSettings):
     kit_extract_dir: str = "./extracted"
     max_kit_size_mb: int = 50
     download_timeout: int = 30
+    # Non-public networks outbound fetches may still reach (see
+    # darla.utils.egress).  Empty = only globally routable addresses.  For
+    # lab setups hosting test kits on a LAN, e.g. ["192.168.50.0/24"].
+    # Env format is JSON: PK_EGRESS_ALLOW_CIDRS=["192.168.50.0/24"]
+    egress_allow_cidrs: list[str] = []
     tlsh_min_size: int = 50
     yara_rules_dir: str = "./rules"
 
@@ -197,6 +204,13 @@ class Settings(BaseSettings):
     oidc_viewer_role_value: str = "Darla.Viewer"
     oidc_analyst_role_value: str = "Darla.Analyst"
 
+    @field_validator("egress_allow_cidrs")
+    @classmethod
+    def _valid_cidrs(cls, value: list[str]) -> list[str]:
+        # Fail at startup, not on the first fetch that consults the list.
+        for cidr in value:
+            ipaddress.ip_network(cidr, strict=False)
+        return value
 
 
 @lru_cache
