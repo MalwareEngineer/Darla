@@ -55,6 +55,10 @@ class Settings(BaseSettings):
     # Browser-based downloading (Camoufox stealth browser fallback)
     browser_download_enabled: bool = False
     browser_download_timeout: int = 60
+    # SOCKS5 egress proxy for Camoufox (darla.egress_proxy), e.g.
+    # "socks5://egress-proxy:1080".  Empty = the browser connects directly
+    # and is NOT covered by the SSRF guard.
+    browser_egress_proxy: str = ""
     browser_turnstile_timeout: int = 30  # seconds before retrying Turnstile with fresh context
     browser_render_on_thin_results: bool = True
     browser_dedup_tlsh_threshold: int = 30
