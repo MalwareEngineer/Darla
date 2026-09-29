@@ -242,7 +242,7 @@ async def get_investigation_tree(
         raise HTTPException(status_code=404, detail="Investigation not found")
 
     kits = await service.get_kit_tree(investigation_id)
-    return _build_tree(kits)
+    return await _build_tree(kits)
 
 
 @router.get("/{investigation_id}/kits")
@@ -295,8 +295,25 @@ def _render_nav_path(kit) -> list[str] | None:
     return hosts if len(hosts) >= 2 else None
 
 
-def _build_tree(kits: list) -> list[InvestigationTreeNode]:
-    """Build a tree of InvestigationTreeNode from a flat list of kits."""
+async def _build_tree(kits: list) -> list[InvestigationTreeNode]:
+    """Build a tree of InvestigationTreeNode from a flat list of kits.
+
+    ``_render_nav_path`` reads and JSON-parses each render's network log
+    from disk; doing that inline would block the event loop (a large log
+    stalls every other request during a tree view).  The reads run off
+    the loop in threads, concurrently across render kits.
+    """
+    import asyncio
+
+    render_kits = [
+        k for k in kits
+        if k.discovery_method == "browser_render" and k.local_path
+    ]
+    nav_lists = await asyncio.gather(
+        *(asyncio.to_thread(_render_nav_path, k) for k in render_kits)
+    )
+    nav_by_id = {k.id: nav for k, nav in zip(render_kits, nav_lists, strict=True)}
+
     nodes: dict[uuid.UUID, InvestigationTreeNode] = {}
     roots: list[InvestigationTreeNode] = []
 
@@ -305,7 +322,7 @@ def _build_tree(kits: list) -> list[InvestigationTreeNode]:
             kit=KitSummary.model_validate(kit),
             discovery_method=kit.discovery_method,
             chain_depth=kit.chain_depth,
-            nav_path=_render_nav_path(kit),
+            nav_path=nav_by_id.get(kit.id),
         )
         nodes[kit.id] = node
 

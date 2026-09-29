@@ -532,8 +532,10 @@ async def _register_cloak_routes(page) -> None:
             )
 
 
-# Text that marks an interstitial/loading state rather than final content.
-# Presence keeps the settle loop waiting; it never forces a capture.
+# Visible-text phrases that mark an interstitial/loading state rather than
+# final content.  Matched against body.innerText (see _settle_final_page),
+# so these only trigger when actually shown; presence keeps the settle loop
+# waiting but never forces a capture.
 _LOADING_MARKERS = (
     "preparing secure session", "please wait", "just a moment", "one moment",
     "redirecting", "loading", "checking your browser", "one last check",
@@ -556,10 +558,27 @@ async def _settle_final_page(
     a content rewrite (fetch→document.write), or a visible spinner each
     reset the streak.  Bounded by ``max_seconds`` so a page that animates
     forever is still captured best-effort.
+
+    Loading markers are matched against the page's *visible* text
+    (``body.innerText``), not raw HTML: a hidden ``loading-overlay`` div
+    or a ``lazy-loading`` CSS class in the source is not a spinner and
+    must not force the full ``max_seconds`` wait on an otherwise-stable
+    credential page.
     """
+    async def _visible_text() -> str:
+        try:
+            return (await page.inner_text("body")).lower()
+        except Exception:
+            return ""
+
     deadline = asyncio.get_event_loop().time() + max_seconds
-    prev_url: str | None = None
-    prev_len = -1
+    # Seed from the current state so an already-stable page settles in
+    # ``stable_needed`` checks rather than one extra.
+    prev_url: str | None = page.url
+    try:
+        prev_len = len(await page.content())
+    except Exception:
+        prev_len = -1
     streak = 0
     saw_loading = False
     while asyncio.get_event_loop().time() < deadline:
@@ -571,8 +590,8 @@ async def _settle_final_page(
             # Navigation in flight — the page is clearly not settled yet.
             streak = 0
             continue
-        text = content[:4000].lower()
-        loading = any(m in text for m in _LOADING_MARKERS)
+        visible = await _visible_text()
+        loading = any(m in visible for m in _LOADING_MARKERS)
         saw_loading = saw_loading or loading
         changed = url != prev_url or abs(len(content) - prev_len) > 64
         prev_url, prev_len = url, len(content)
