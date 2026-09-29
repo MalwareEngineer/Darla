@@ -916,9 +916,14 @@ async def _async_browser_download(
                 )
                 if gate_found:
                     logger.info(
-                        "Bot gate interaction completed, final URL: %s",
-                        page.url,
+                        "Bot gate interaction completed: type=%s, final URL: %s",
+                        gate_found, page.url,
                     )
+                    # The honey email was typed and submitted inside the
+                    # bypass, so the final domain was reached by
+                    # interaction — same signal _click_lure_cta carries.
+                    if gate_found == "email_gate":
+                        cta_clicked = True
 
             # General CTA click — catches pages with no Turnstile and
             # no bot gate (QR code landers, link-through pages), or pages
@@ -1299,15 +1304,38 @@ async def _simulate_human_behavior(page) -> None:
 
 # Fields a lure uses to ask "which email got the document?".  Case-
 # insensitive attribute matches cover name="userEmail", id="mail", etc.
+# The placeholder/aria variants catch kits that label the field only
+# visually ("you@company.com", aria-label="Work e-mail").
 _EMAIL_GATE_SELECTOR = (
     'input[type="email"], input[autocomplete="email"], '
     'input[autocomplete="username"], input[name*="mail" i], '
-    'input[id*="mail" i], input[placeholder*="mail" i]'
+    'input[id*="mail" i], input[placeholder*="mail" i], '
+    'input[aria-label*="mail" i], input[name*="recipient" i], '
+    'input[id*="recipient" i], input[placeholder*="@"]'
 )
 _TEXT_INPUT_TYPES = {"", "text", "email"}
 
 
 GATE_NONE, GATE_FILLED, GATE_UNFILLED = "none", "filled", "unfilled"
+
+
+async def _shares_form_with_password(field) -> bool:
+    """True when this input sits in the same form as a password field.
+
+    Distinguishes an email *gate* (email field alone, unlocks the next
+    stage) from the credential harvester itself (email + password).
+    Falls back to a document-wide check when the input is not inside a
+    ``<form>`` — kits frequently post via JS with no form element.
+    """
+    try:
+        return bool(await field.evaluate(
+            """(el) => {
+                const scope = el.form || el.closest('form') || document;
+                return !!scope.querySelector('input[type="password"]');
+            }"""
+        ))
+    except Exception:
+        return False
 
 
 async def _fill_email_gate(page) -> str:
@@ -1319,6 +1347,10 @@ async def _fill_email_gate(page) -> str:
     captured.  Returns ``GATE_FILLED``, ``GATE_NONE`` (no gate), or
     ``GATE_UNFILLED`` (gate present, no ``PK_HONEY_EMAIL`` configured —
     the caller must not submit it blank).
+
+    A field sharing a form with a password input is skipped: that is the
+    credential harvester we came to capture, not a gate, and typing +
+    submitting there would navigate off the page before it is saved.
     """
     from darla.config import get_settings
 
@@ -1335,6 +1367,8 @@ async def _fill_email_gate(page) -> str:
             if not await field.is_visible() or not await field.is_editable():
                 continue
             if (await field.input_value()).strip():
+                continue
+            if await _shares_form_with_password(field):
                 continue
             if not honey_email:
                 logger.info(
@@ -1489,28 +1523,52 @@ async def _click_lure_cta(page) -> bool:
 async def _detect_bot_gate(page) -> dict | None:
     """Detect common anti-bot verification gates on the page.
 
-    Scans for:
-    0. Fake-captcha gates whose class/id tokens contain ``captcha`` or
-       related (``human-check``, ``human-verif``).  High-confidence
-       structural signal — legitimate sites don't name login-form
-       elements ``captcha-box``/``captcha-btn``.  Catches the AITM
-       cred-relay pattern (``#captcha-wrapper`` wrapping a click-to-
-       continue gate that unlocks a credential harvester + ``wss://``
-       relay).
-    1. Buttons/links with verify/check text (traditional gates)
-    2. Div/span checkbox-style clickables near verification text
-       (e.g. "Prove you are human", "Verify you're not a bot")
-    3. Hidden challenge form fields with a single prominent clickable
+    Runs as a single ``page.evaluate`` whose layers are ordered
+    cheapest-first and short-circuit on the first match, so the common
+    case (no gate) pays only for a handful of CSS attribute selectors:
 
-    Returns gate metadata or None if no gate detected.
+      L1  class/id token match for fake-captcha widgets — one
+          ``querySelector``, no layout, no text.  High confidence:
+          legitimate sites don't name login-form elements
+          ``captcha-box``/``captcha-btn``.  Catches the AITM cred-relay
+          pattern (``#captcha-wrapper`` wrapping a click-to-continue
+          gate that unlocks a credential harvester + ``wss://`` relay).
+      L2  class/id/ARIA token match for slide-to-unlock and
+          press-and-hold widgets.  Same cost as L1, and it has to run
+          before any text layer: these need a drag / long-press, so
+          classifying one as a plain ``verify_button`` means clicking a
+          handle that ignores clicks and stalling on the gate.
+      L3  one ``document.body.innerText`` read — forces layout, so it
+          happens once and every later layer reuses the result.
+      L4  text/ARIA scan over button-ish candidates, bounded by the
+          candidate selector rather than the whole DOM.
+      L5  CSS-affordance scan: elements that only *look* clickable
+          (``[class*="btn"]``, ``tabindex``, ``role``, ``aria-pressed``,
+          ``data-action``, ``draggable``) sitting next to gate text.
+          Catches kits whose gate element carries no vocabulary of its
+          own — an icon, a bare styled div.
+      L6  div/span checkbox sweep — ``getComputedStyle`` per node.
+      L7  hidden challenge form fields with a prominent clickable.
+      L8  POST form + hidden input + a full pointer sweep — the most
+          expensive path, so it stays last.
+      L9  honey-email entry gate.  Cheap to test but deliberately last
+          on *priority*, not cost: any real bot gate on the same page
+          outranks it, and an email field sharing a form with a
+          password input is the credential harvester we came to
+          capture, not a gate to click through.
+
+    Returns gate metadata or None if no gate detected.  ``type`` tells
+    the bypass how to interact: ``slider_gate`` drags, ``hold_gate``
+    long-presses, ``email_gate`` types the honey credential, every
+    other type clicks.
     """
     try:
-        return await page.evaluate("""
-            () => {
+        return await page.evaluate(r"""
+            (emailSel) => {
                 function makeSelector(el) {
                     if (el.id) return '#' + CSS.escape(el.id);
                     if (el.className && typeof el.className === 'string') {
-                        const cls = el.className.trim().split(/\\s+/)[0];
+                        const cls = el.className.trim().split(/\s+/)[0];
                         if (cls) return el.tagName.toLowerCase() + '.' + CSS.escape(cls);
                     }
                     return el.tagName.toLowerCase();
@@ -1525,7 +1583,154 @@ async def _detect_bot_gate(page) -> dict | None:
                     return r.width > 0 && r.height > 0;
                 }
 
-                // --- Strategy 0: class/id token signal for fake captcha gates ---
+                function boxOf(el) {
+                    const r = el.getBoundingClientRect();
+                    return { x: r.x, y: r.y, width: r.width, height: r.height };
+                }
+
+                // Everything a control shows a user.  Kits label the gate
+                // via aria-label/title/data-text when the affordance is an
+                // icon or a bare div, so textContent alone under-matches.
+                function labelOf(el) {
+                    const attr = (n) => (el.getAttribute ? (el.getAttribute(n) || '') : '');
+                    return [
+                        el.textContent || '',
+                        el.value || '',
+                        attr('aria-label'), attr('title'),
+                        attr('placeholder'), attr('data-text'),
+                    ].join(' ').replace(/\s+/g, ' ').trim();
+                }
+
+                // L2 vocabulary, reused by L3/L4/L5 to pick an interaction.
+                const holdPats = [
+                    /press\s*(?:and|&|\+)\s*hold/i,
+                    /click\s*(?:and|&|\+)\s*hold/i,
+                    /tap\s*(?:and|&|\+)\s*hold/i,
+                    /touch\s*(?:and|&|\+)\s*hold/i,
+                    /hold\s*(?:down\s*)?(?:the\s*)?(?:button|circle|icon|square)/i,
+                    /hold\s*to\s*(?:unlock|open|access|continue|verify|view|proceed|confirm|download)/i,
+                    /keep\s*(?:holding|pressing)/i,
+                    /long[- ]press/i,
+                ];
+                const slidePats = [
+                    /slide\s*to\s*(?:unlock|open|access|continue|verify|view|proceed|confirm|download)/i,
+                    /swipe\s*to\s*(?:unlock|open|access|continue|verify|view|proceed|confirm|download)/i,
+                    /drag\s*to\s*(?:unlock|open|access|continue|verify|view|proceed|confirm|download)/i,
+                    /slide\s*(?:the\s*)?(?:slider|handle|button|arrow|puzzle)/i,
+                    /drag\s*(?:the\s*)?(?:slider|handle|puzzle|piece)/i,
+                    /move\s*the\s*slider/i,
+                    /slide\s*(?:right|across)/i,
+                    /swipe\s*right/i,
+                ];
+                const anyPat = (pats, s) => pats.some(p => p.test(s));
+
+                // Copy that marks a "which address did this reach?" gate.
+                // Required corroboration for the email probe: a burned
+                // token drops us on a real decoy site (temu, dhgate), and
+                // typing the honey address into its newsletter box would
+                // leak the credential to an uninvolved third party.
+                const emailLurePats = [
+                    /e-?mail (?:address )?(?:this|the|that) (?:document|file|message|invoice|fax|voicemail)/i,
+                    /(?:enter|confirm|verify) (?:your |the )?e-?mail (?:address )?to (?:view|access|open|continue|proceed|download|unlock)/i,
+                    /e-?mail (?:that|which) (?:received|got)/i,
+                    /(?:document|file|message) (?:was )?(?:sent|shared) to/i,
+                    /to (?:view|access|open|download) (?:this|the) (?:document|file|message)/i,
+                    /enter your e-?mail (?:below )?to continue/i,
+                ];
+
+                // An empty, visible email field that is not part of a
+                // credential form.  A field sharing a form with a password
+                // input is the harvester we came to capture, not a gate:
+                // submitting it navigates away before the page is saved.
+                function findEmailGateField(text) {
+                    const candidates = [];
+                    for (const f of document.querySelectorAll(emailSel)) {
+                        const t = (f.getAttribute('type') || '').toLowerCase();
+                        if (t && t !== 'text' && t !== 'email') continue;
+                        if (f.disabled || f.readOnly) continue;
+                        if (!isVisible(f)) continue;
+                        if (f.value && f.value.trim()) continue;
+                        const scope = f.form || f.closest('form') || document;
+                        if (scope.querySelector('input[type="password"]')) continue;
+                        candidates.push(f);
+                    }
+                    if (candidates.length === 0) return null;
+                    if (anyPat(emailLurePats, text)) return candidates[0];
+                    // No lure copy: accept only a bare gate lander — the
+                    // page's single input, next to no navigation.
+                    const inputs = [...document.querySelectorAll(
+                        'input:not([type="hidden"]):not([type="submit"]):not([type="button"]), '
+                        + 'textarea, select'
+                    )].filter(isVisible);
+                    const links = document.querySelectorAll('a[href]');
+                    if (inputs.length === 1 && links.length <= 2) return candidates[0];
+                    return null;
+                }
+
+                function emailGateResult(f) {
+                    return {
+                        type: 'email_gate',
+                        selector: makeSelector(f),
+                        text: labelOf(f).substring(0, 80),
+                        tagName: f.tagName,
+                    };
+                }
+
+                // Builders for the two interaction-specific gate types.
+                // Declared here because L1 can also land on a slider/hold
+                // widget that happens to be captcha-named.
+                function sliderResult(host, type) {
+                    // The draggable handle, not the track: dragging the
+                    // track's centre moves nothing.
+                    let handle = host.querySelector(
+                        '[class*="handle"], [class*="knob"], [class*="thumb"], '
+                        + '[class*="slider-btn"], [class*="slide-btn"], '
+                        + '[class*="drag"], [draggable="true"], [role="slider"], '
+                        + 'button, input[type="range"]'
+                    );
+                    if (!handle) {
+                        for (const d of host.querySelectorAll('*')) {
+                            if (!isVisible(d)) continue;
+                            const cs = window.getComputedStyle(d);
+                            if (cs.cursor === 'pointer' || cs.cursor === 'grab'
+                                || cs.cursor === 'move' || cs.cursor === 'ew-resize') {
+                                handle = d;
+                                break;
+                            }
+                        }
+                    }
+                    const target = handle || host;
+                    return {
+                        type: type,
+                        selector: makeSelector(target),
+                        host_selector: makeSelector(host),
+                        text: labelOf(host).substring(0, 80),
+                        tagName: target.tagName,
+                        box: boxOf(target),
+                        track: boxOf(host),
+                        isRangeInput: target.tagName === 'INPUT'
+                            && (target.getAttribute('type') || '').toLowerCase() === 'range',
+                    };
+                }
+
+                function holdResult(host, target) {
+                    const el = target || host;
+                    const raw = host.getAttribute('data-hold-duration')
+                        || host.getAttribute('data-hold')
+                        || host.getAttribute('data-duration') || '';
+                    const parsed = parseInt(raw, 10);
+                    return {
+                        type: 'hold_gate',
+                        selector: makeSelector(el),
+                        host_selector: makeSelector(host),
+                        text: labelOf(host).substring(0, 80),
+                        tagName: el.tagName,
+                        box: boxOf(el),
+                        hold_ms: Number.isFinite(parsed) && parsed > 0 ? parsed : null,
+                    };
+                }
+
+                // --- L1: class/id token signal for fake captcha gates ---
                 // Target class/id substrings that legitimate sites don't use
                 // on their login pages.  Attackers tend to copy open-source
                 // click-captcha templates that preserve these class names.
@@ -1533,12 +1738,29 @@ async def _detect_bot_gate(page) -> dict | None:
                     '[class*="captcha"], [id*="captcha"], '
                     + '[class*="human-check"], [id*="human-check"], '
                     + '[class*="human-verif"], [id*="human-verif"], '
-                    + '[class*="clickcaptcha"], [id*="clickcaptcha"]'
+                    + '[class*="humancheck"], [class*="humanverif"], '
+                    + '[class*="clickcaptcha"], [id*="clickcaptcha"], '
+                    + '[class*="not-robot"], [class*="notrobot"], '
+                    + '[class*="robot-check"], [class*="robotcheck"], '
+                    + '[class*="verify-human"], [id*="verify-human"], '
+                    + '[class*="verifyhuman"], [class*="human-test"]'
                 );
                 if (captchaHost && isVisible(captchaHost)) {
+                    // A captcha-named host can still be a slider/hold widget
+                    // ("slider-captcha"); honour the interaction its own
+                    // label advertises before falling through to a click.
+                    const hostLabel = labelOf(captchaHost);
+                    if (anyPat(slidePats, hostLabel)) {
+                        return sliderResult(captchaHost, 'slider_gate');
+                    }
+                    if (anyPat(holdPats, hostLabel)) {
+                        return holdResult(captchaHost, null);
+                    }
                     // Prefer an explicit button/role inside the host.
                     const explicitClickable = captchaHost.querySelector(
-                        'button, [role="button"], input[type="submit"], [onclick]'
+                        'button, [role="button"], input[type="submit"], [onclick], '
+                        + '[role="checkbox"], input[type="checkbox"], '
+                        + '[tabindex]:not([tabindex="-1"])'
                     );
                     // Else any cursor:pointer descendant — the whole gate
                     // div sometimes IS the clickable (onclick attached via
@@ -1570,38 +1792,122 @@ async def _detect_bot_gate(page) -> dict | None:
                     };
                 }
 
-                // Hoisted out of Strategy 2 because Strategy 1's
-                // skip-when-form-driven check below needs them too.
+                // ---------------------------------------------------
+                // L2: slide-to-unlock / press-and-hold widget tokens
+                // ---------------------------------------------------
+                // Same cost as L1 (one querySelector each) and it must
+                // beat every text layer, because these gates ignore a
+                // plain click — the bypass has to drag or long-press.
+                const slideHost = document.querySelector(
+                    '[class*="slide-to"], [id*="slide-to"], '
+                    + '[class*="slidetounlock"], [id*="slidetounlock"], '
+                    + '[class*="slide-unlock"], [class*="slideunlock"], '
+                    + '[class*="swipe-to"], [id*="swipe-to"], '
+                    + '[class*="drag-to"], [id*="drag-to"], '
+                    + '[class*="slider-captcha"], [class*="slidercaptcha"], '
+                    + '[class*="slide-verify"], [class*="slideverify"], '
+                    + '[class*="puzzle-captcha"], [class*="puzzle-slider"], '
+                    + '[aria-label*="slide to" i], [aria-label*="swipe to" i], '
+                    + '[data-slide-to-unlock], [data-slider], '
+                    + '[role="slider"], input[type="range"]'
+                );
+                if (slideHost && isVisible(slideHost)) {
+                    return sliderResult(slideHost, 'slider_gate');
+                }
+
+                const holdHost = document.querySelector(
+                    '[class*="press-and-hold"], [class*="press-hold"], '
+                    + '[class*="presshold"], [id*="press-hold"], '
+                    + '[class*="hold-to"], [id*="hold-to"], '
+                    + '[class*="hold-btn"], [class*="holdbtn"], '
+                    + '[class*="hold-button"], [class*="holdbutton"], '
+                    + '[class*="long-press"], [class*="longpress"], '
+                    + '[aria-label*="press and hold" i], [aria-label*="hold to" i], '
+                    + '[data-hold], [data-hold-duration]'
+                );
+                if (holdHost && isVisible(holdHost)) {
+                    const inner = holdHost.querySelector(
+                        'button, [role="button"], [class*="btn"], '
+                        + '[tabindex]:not([tabindex="-1"])'
+                    );
+                    return holdResult(holdHost, inner && isVisible(inner) ? inner : holdHost);
+                }
+
+                // ---------------------------------------------------
+                // L3: one innerText read + gate vocabulary
+                // ---------------------------------------------------
+                // Hoisted so L4's skip-when-form-driven check and every
+                // later layer reuse the single forced layout this costs.
                 const pageText = document.body ? document.body.innerText : '';
                 const gateTextPats = [
+                    // "are you human" family
                     /prove you are human/i,
+                    /prove you'?re (?:human|not a robot)/i,
                     /verify you'?re not a bot/i,
+                    /verify (?:that )?you(?:'|a)?re (?:a )?human/i,
                     /confirm you'?re real/i,
                     /confirm.{0,3}humanit/i,
+                    /confirm you are not a robot/i,
+                    /are you (?:a )?human/i,
                     /i'?m not a robot/i,
                     /i am not a robot/i,
                     /i am.{0,3}human/i,
-                    /human check/i,
-                    /human verification/i,
-                    /bot protection/i,
-                    /security check/i,
-                    /security verification/i,
-                    /checking.{0,10}browser/i,
-                    /click.{0,10}(box|button).{0,10}verify/i,
+                    /i'?m (?:a )?human/i,
                     /not a robot/i,
+                    /human (?:check|verification|challenge|test)/i,
+                    /robot check/i,
+                    /anti-?bot/i,
+                    /bot protection/i,
+                    /captcha/i,
+                    // "security / verification" family
+                    /security (?:check|verification|challenge)/i,
+                    /verification required/i,
+                    /additional verification/i,
+                    /verify (?:your )?identity/i,
+                    /verify (?:your )?(?:connection|request|access)/i,
+                    /complete (?:the )?(?:security )?(?:check|challenge|verification)/i,
+                    /checking.{0,10}browser/i,
+                    /verifying (?:your )?(?:browser|connection|request|identity)/i,
+                    /connection is secure/i,
+                    /unusual traffic/i,
+                    /suspicious activity/i,
+                    // interstitial / "one more step" family
+                    /one more step/i,
+                    /just a moment/i,
+                    /please wait while we (?:verify|check|prepare)/i,
+                    /this (?:process|check) is automatic/i,
+                    /you will be redirected (?:shortly|automatically)/i,
+                    /before (?:you )?(?:continue|proceed|access)/i,
+                    // explicit instruction family
+                    /click.{0,10}(box|button|checkbox).{0,10}verify/i,
+                    /click (?:the )?(?:box|checkbox|button) below/i,
+                    /tap (?:the )?(?:box|checkbox|button) (?:below|to)/i,
+                    /press (?:the )?button (?:below|to)/i,
+                    /verify to (?:continue|proceed|view|access|download|open)/i,
+                    // slide / hold instructions
+                    ...slidePats,
+                    ...holdPats,
+                    // non-English kit copy seen in the wild
+                    /no soy un robot/i,
+                    /je ne suis pas un robot/i,
+                    /ich bin kein roboter/i,
+                    /n(?:a|ã)o sou um rob(?:o|ô)/i,
+                    /verificaci(?:o|ó)n de seguridad/i,
                 ];
                 const hasGateText = gateTextPats.some(p => p.test(pageText));
+                const pageWantsSlide = anyPat(slidePats, pageText);
+                const pageWantsHold = anyPat(holdPats, pageText);
 
                 // Strategy-priority guard: if the page has a hidden form
                 // with submit-token fields AND a small clickable element
                 // (checkbox-style div/span), the form is driven by the
                 // checkbox click, not by any "Verify" anchor that might
-                // also be on the page.  Skip Strategy 1 in that case so
-                // Strategy 2 / 4 can return the right element.
+                // also be on the page.  Skip L4 / L5 in that case so
+                // L6 / L8 can return the right element.
                 //
                 // Without this, kits with both a "Verify" link and a
                 // verifyCheckbox (e.g. teamfiledocumet.com pattern) match
-                // Strategy 1 first; we click the link, the gate JS clears
+                // L4 first; we click the link, the gate JS clears
                 // the wrapper but never submits the form, and the kit
                 // gets stuck on the gate page (TLSH-matched as ancestor
                 // duplicate).
@@ -1630,29 +1936,71 @@ async def _detect_bot_gate(page) -> dict | None:
                     submitTokenForm && hasGateText && smallClickable
                 );
 
-                // --- Strategy 1: clickable elements with verify text ---
+                // An unfilled honey-email field on a page with no bot-gate
+                // vocabulary means the address itself is the gate.  It is
+                // validated server-side against the lure recipient, so it
+                // has to be typed before any "Next"/"Continue" is pressed
+                // — otherwise L4 matches the button, clicks it, and the
+                // kit answers "please enter the correct email".  Routing
+                // it as email_gate hands the page to _click_lure_cta,
+                // which fills first and then submits.
+                if (!hasGateText) {
+                    const earlyEmail = findEmailGateField(pageText);
+                    if (earlyEmail) return emailGateResult(earlyEmail);
+                }
+
+                // ---------------------------------------------------
+                // L4: text/ARIA scan over button-ish candidates
+                // ---------------------------------------------------
                 const candidates = [
                     ...document.querySelectorAll(
                         'button, a, input[type="button"], input[type="submit"], '
                         + '[role="button"], [onclick], div[class*="btn"], span[class*="btn"], '
-                        + '[class*="call-action"], [class*="cta"]'
+                        + '[class*="call-action"], [class*="cta"], '
+                        + '[role="checkbox"], [role="switch"], label[for], summary'
                     )
                 ];
 
                 const verifyPatterns = [
                     /^verify$/i, /^verify now$/i, /^verify you are human$/i,
+                    /^verify me$/i, /^verify human$/i, /^verify my browser$/i,
                     /^check$/i, /^continue$/i, /^i'?m not a robot$/i,
+                    /^i am not a robot$/i, /^i'?m human$/i, /^i am human$/i,
+                    /^yes,? i'?m human$/i,
                     /^press & hold$/i, /^click to continue$/i,
-                    /^confirm$/i, /^human verification$/i,
+                    /^confirm$/i, /^confirm you are human$/i,
+                    /^human verification$/i, /^security check$/i,
                     /^click to verify/i, /^verify your browser/i,
                     /^verify to /i, /play.*voicemail/i, /listen.*message/i,
                     /access.*voicemail/i, /^play now$/i, /^listen now$/i,
+                    /^click here to (?:verify|continue|proceed|access)/i,
+                    /^tap to (?:verify|continue|proceed|unlock)/i,
+                    /^press to (?:verify|continue|proceed|unlock)/i,
+                    /^start (?:the )?(?:verification|challenge|check)$/i,
+                    /^begin verification$/i,
+                    /^complete (?:the )?(?:verification|challenge|check)$/i,
+                    /^prove you'?re human$/i, /^prove you are human$/i,
+                    /^verify (?:your )?identity$/i,
+                    /^unlock$/i, /^unlock (?:now|document|file|access|page)/i,
+                    /^continue to (?:site|page|document|file)/i,
+                    /^proceed$/i, /^proceed to /i, /^next$/i,
+                    /^verify (?:&|and) continue$/i,
                 ];
 
                 if (!skipVerifyButtonStrategy) {
                     for (const el of candidates) {
-                        const text = (el.textContent || el.value || '').trim();
+                        const text = labelOf(el);
                         if (text.length > 60 || text.length < 3) continue;
+                        // Interaction-changing vocabulary wins: a control
+                        // labelled "Slide to unlock" must not be clicked.
+                        if (anyPat(slidePats, text)) {
+                            const host = el.parentElement && isVisible(el.parentElement)
+                                ? el.parentElement : el;
+                            return sliderResult(host, 'slider_gate');
+                        }
+                        if (anyPat(holdPats, text)) {
+                            return holdResult(el, el);
+                        }
                         for (const pat of verifyPatterns) {
                             if (pat.test(text)) {
                                 return {
@@ -1666,9 +2014,83 @@ async def _detect_bot_gate(page) -> dict | None:
                     }
                 }
 
-                // --- Strategy 2: div/span checkbox gates ---
-                // ``pageText`` / ``gateTextPats`` / ``hasGateText`` are
-                // hoisted above so Strategy 1's skip guard can use them.
+                // ---------------------------------------------------
+                // L5: CSS-affordance scan next to gate text
+                // ---------------------------------------------------
+                // Kits whose gate element has no vocabulary at all: an
+                // icon, an empty styled div, a tabindex'd span.  Only
+                // runs once L3 confirmed gate text, and only accepts a
+                // candidate that is labelled, inside a verification-named
+                // container, or the page's single affordance — otherwise
+                // this would happily click site navigation.
+                if (hasGateText && !skipVerifyButtonStrategy) {
+                    const affordances = [...document.querySelectorAll(
+                        '[tabindex]:not([tabindex="-1"]), '
+                        + '[class*="btn"], [class*="button"], [id*="btn"], '
+                        + '[role="button"], [role="checkbox"], [role="switch"], '
+                        + '[aria-pressed], [aria-checked], [onclick], '
+                        + '[data-action], [data-toggle], [data-target], [jsaction], '
+                        + 'label[for], input[type="checkbox"], [draggable="true"]'
+                    )].filter(el => {
+                        if (!isVisible(el)) return false;
+                        const r = el.getBoundingClientRect();
+                        return r.width >= 14 && r.height >= 14
+                            && r.width <= 640 && r.height <= 240
+                            && r.top >= 0 && r.top < 4000;
+                    });
+
+                    const containerSel = '[class*="verif"], [id*="verif"], '
+                        + '[class*="captcha"], [class*="human"], [class*="robot"], '
+                        + '[class*="challenge"], [class*="gate"], [class*="check"]';
+                    let best = null;
+                    let bestScore = 0;
+                    for (const el of affordances) {
+                        const label = labelOf(el);
+                        let score = 0;
+                        if (anyPat(slidePats, label) || anyPat(holdPats, label)) score = 4;
+                        else if (gateTextPats.some(p => p.test(label))) score = 3;
+                        else if (el.closest(containerSel)) score = 2;
+                        if (score > bestScore) { best = el; bestScore = score; }
+                    }
+                    // Nothing labelled or containerised: accept a lone
+                    // affordance.  The gate text already established that
+                    // this page is a gate and there is nothing else to hit.
+                    if (!best && affordances.length === 1) {
+                        best = affordances[0];
+                        bestScore = 1;
+                    }
+
+                    if (best) {
+                        const label = labelOf(best);
+                        if (anyPat(slidePats, label) || (pageWantsSlide && bestScore < 3)) {
+                            const host = best.parentElement && isVisible(best.parentElement)
+                                ? best.parentElement : best;
+                            return sliderResult(host, 'slider_gate');
+                        }
+                        if (anyPat(holdPats, label) || (pageWantsHold && bestScore < 3)) {
+                            return holdResult(best, best);
+                        }
+                        const tag = best.tagName.toLowerCase();
+                        const role = (best.getAttribute('role') || '').toLowerCase();
+                        const isCheckbox = role === 'checkbox' || role === 'switch'
+                            || tag === 'label'
+                            || (tag === 'input'
+                                && (best.getAttribute('type') || '').toLowerCase() === 'checkbox');
+                        return {
+                            type: isCheckbox ? 'checkbox_gate' : 'affordance_gate',
+                            selector: makeSelector(best),
+                            text: (label || pageText).substring(0, 80).trim(),
+                            tagName: best.tagName,
+                            hasAutoSubmitForm: !!document.querySelector(
+                                'form[method] input[type="hidden"]'
+                            ),
+                        };
+                    }
+                }
+
+                // ---------------------------------------------------
+                // L6: div/span checkbox sweep (getComputedStyle heavy)
+                // ---------------------------------------------------
                 if (hasGateText) {
                     const clickables = [...document.querySelectorAll(
                         'div[class*="check"], div[class*="target"], '
@@ -1734,7 +2156,9 @@ async def _detect_bot_gate(page) -> dict | None:
                     }
                 }
 
-                // --- Strategy 3: hidden challenge fields with a button ---
+                // ---------------------------------------------------
+                // L7: hidden challenge fields with a button
+                // ---------------------------------------------------
                 const challengeFields = document.querySelectorAll(
                     'input[type="hidden"][name*="nonce"], input[type="hidden"][name*="token"], '
                     + 'input[type="hidden"][name*="pow"], form[style*="display:none"]'
@@ -1757,7 +2181,9 @@ async def _detect_bot_gate(page) -> dict | None:
                     }
                 }
 
-                // --- Strategy 4: POST form with hidden input + gate page text ---
+                // ---------------------------------------------------
+                // L8: POST form + hidden input + full pointer sweep
+                // ---------------------------------------------------
                 if (hasGateText) {
                     const form = document.querySelector('form[method]');
                     const hiddenInput = form
@@ -1783,9 +2209,18 @@ async def _detect_bot_gate(page) -> dict | None:
                     }
                 }
 
+                // ---------------------------------------------------
+                // L9: honey-email entry gate (last by priority)
+                // ---------------------------------------------------
+                // Tail case: the page carries gate vocabulary but no gate
+                // element matched above, and it has an email field.  The
+                // pre-L4 probe already handled pages with no gate text.
+                const emailField = findEmailGateField(pageText);
+                if (emailField) return emailGateResult(emailField);
+
                 return null;
             }
-        """)
+        """, _EMAIL_GATE_SELECTOR)
     except Exception as e:
         logger.warning("Bot gate detection error: %s", e)
         return None
@@ -1817,10 +2252,169 @@ async def _build_mouse_track(page) -> None:
         pass
 
 
-async def _attempt_bot_gate_bypass(page, timeout_remaining: float) -> bool:
+# Upper bound on a single press-and-hold attempt.  Real gates fill in
+# 2-5s; anything longer is a gate we aren't going to pass, and the hold
+# is spending the shared per-page budget while it waits.
+_MAX_HOLD_SECONDS = 8.0
+
+# Gate types whose resolution is a form POST rather than an in-page
+# challenge, so the bypass polls for navigation instead of for the gate
+# text clearing.
+_FORM_SUBMIT_GATE_TYPES = {"checkbox_gate", "fake_captcha_gate"}
+
+
+async def _live_box(page, gate: dict) -> dict | None:
+    """Re-measure the gate element, falling back to the detected box.
+
+    Detection and interaction are separated by the mouse-track phase, so
+    the layout may have shifted (fonts, lazy images, the gate's own
+    entrance animation).
+    """
+    with contextlib.suppress(Exception):
+        element = await page.query_selector(gate["selector"])
+        if element:
+            box = await element.bounding_box()
+            if box and box.get("width") and box.get("height"):
+                return box
+    box = gate.get("box")
+    if box and box.get("width") and box.get("height"):
+        return box
+    return None
+
+
+async def _drag_slider_gate(page, gate: dict) -> bool:
+    """Drag a slide-to-unlock handle from one end of its track to the other.
+
+    Slider gates listen for ``mousedown`` → a run of ``mousemove`` →
+    ``mouseup``; a plain click emits none of the intermediate moves, so
+    the handle snaps back and the gate never resolves.  The drag is
+    eased and jittered because these kits routinely reject a
+    constant-velocity, perfectly horizontal path as synthetic.
+    """
+    box = await _live_box(page, gate)
+    if not box:
+        logger.warning("Slider gate handle not measurable — skipping drag")
+        return False
+
+    track = gate.get("track") or {}
+    sx = box["x"] + box["width"] / 2
+    sy = box["y"] + box["height"] / 2
+
+    track_width = track.get("width") or 0
+    if track_width > box["width"]:
+        # Overshoot the track's right edge slightly; kits check the
+        # handle actually reached the end, and clamp the excess.
+        target_x = track["x"] + track_width - box["width"] / 2 + 12.0
+    else:
+        target_x = sx + max(240.0, box["width"] * 6)
+
+    viewport = page.viewport_size or {"width": 1280, "height": 800}
+    target_x = min(target_x, viewport["width"] - 4.0)
+    if target_x <= sx:
+        target_x = sx + 160.0
+
+    try:
+        await page.mouse.move(sx, sy)
+        await asyncio.sleep(random.uniform(0.15, 0.35))
+        await page.mouse.down()
+        steps = random.randint(18, 28)
+        for i in range(1, steps + 1):
+            frac = i / steps
+            # Ease-out: fast off the mark, decelerating into the end stop.
+            eased = 1 - (1 - frac) ** 2
+            await page.mouse.move(
+                sx + (target_x - sx) * eased,
+                sy + random.uniform(-1.5, 1.5),
+            )
+            await asyncio.sleep(random.uniform(0.012, 0.035))
+        await asyncio.sleep(random.uniform(0.1, 0.25))
+        await page.mouse.up()
+        logger.info(
+            "Dragged slider gate %.0fpx (%s)", target_x - sx, gate["selector"],
+        )
+    except Exception as e:
+        logger.warning("Slider gate drag failed: %s", e)
+        return False
+
+    # ``input[type=range]`` sliders are often read on the ``change``
+    # event rather than from pointer coordinates; a drag that lands a
+    # pixel short leaves the value below max.  Pin it and re-fire.
+    if gate.get("isRangeInput"):
+        with contextlib.suppress(Exception):
+            await page.evaluate(
+                """(sel) => {
+                    const el = document.querySelector(sel);
+                    if (!el) return;
+                    el.value = el.max || '100';
+                    el.dispatchEvent(new Event('input', { bubbles: true }));
+                    el.dispatchEvent(new Event('change', { bubbles: true }));
+                }""",
+                gate["selector"],
+            )
+    return True
+
+
+async def _press_and_hold_gate(page, gate: dict) -> bool:
+    """Hold the primary button down until the gate resolves or time runs out.
+
+    Press-and-hold gates fill a progress ring over a fixed duration and
+    reset on ``mouseup``, so a click registers as an aborted attempt.
+    The hold honours a ``data-hold-duration`` hint when the kit exposes
+    one and otherwise runs until the page reacts, capped so a gate that
+    never resolves can't eat the whole budget.
+    """
+    box = await _live_box(page, gate)
+    if not box:
+        logger.warning("Hold gate element not measurable — skipping hold")
+        return False
+
+    hold_ms = gate.get("hold_ms")
+    if hold_ms and 500 <= hold_ms <= _MAX_HOLD_SECONDS * 1000:
+        # Kit-declared duration plus a margin so we outlast its timer.
+        hold_for = hold_ms / 1000 + 0.8
+    else:
+        hold_for = random.uniform(3.5, 4.5)
+    hold_for = min(hold_for, _MAX_HOLD_SECONDS)
+
+    tx = box["x"] + box["width"] / 2
+    ty = box["y"] + box["height"] / 2
+    pre_url = page.url
+
+    try:
+        await page.mouse.move(tx, ty)
+        await asyncio.sleep(random.uniform(0.15, 0.35))
+        await page.mouse.down()
+        deadline = time.monotonic() + hold_for
+        while time.monotonic() < deadline:
+            await asyncio.sleep(0.25)
+            # A finger resting on a button still drifts a pixel or two;
+            # some gates treat a perfectly static pointer as synthetic.
+            with contextlib.suppress(Exception):
+                await page.mouse.move(
+                    tx + random.uniform(-1.2, 1.2),
+                    ty + random.uniform(-1.2, 1.2),
+                )
+            if page.url != pre_url:
+                break
+        await page.mouse.up()
+        logger.info(
+            "Held gate element for %.1fs (%s)", hold_for, gate["selector"],
+        )
+        return True
+    except Exception as e:
+        logger.warning("Hold gate press failed: %s", e)
+        with contextlib.suppress(Exception):
+            await page.mouse.up()
+        return False
+
+
+async def _attempt_bot_gate_bypass(page, timeout_remaining: float) -> str | None:
     """Detect and attempt to bypass a custom anti-bot verification gate.
 
-    Returns True if a gate was detected and interaction attempted.
+    Returns the gate type that was engaged, or None when no gate was
+    detected.  ``slider_gate`` is dragged, ``hold_gate`` is long-pressed,
+    ``email_gate`` is handed to the honey-credential filler, and every
+    other type is clicked.
     """
     gate = await _detect_bot_gate(page)
     if not gate:
@@ -1840,12 +2434,20 @@ async def _attempt_bot_gate_bypass(page, timeout_remaining: float) -> bool:
             )
         except Exception:
             pass
-        return False
+        return None
 
     logger.info(
         "Bot gate detected: type=%s text=%r selector=%s",
         gate["type"], gate["text"], gate["selector"],
     )
+
+    # An email gate is not a bot check — it is the honey-credential
+    # path.  _click_lure_cta already fills the field and submits it
+    # (button, or Enter when the kit's submit control is unlabelled).
+    if gate["type"] == "email_gate":
+        submitted = await _click_lure_cta(page)
+        logger.info("Email gate handled (submitted=%s)", submitted)
+        return "email_gate" if submitted else "email_gate_unsubmitted"
 
     # Phase 1: Build mouse movement track
     # Brief delay so page event listeners are fully attached before
@@ -1853,8 +2455,20 @@ async def _attempt_bot_gate_bypass(page, timeout_remaining: float) -> bool:
     await asyncio.sleep(random.uniform(0.5, 1.0))
     await _build_mouse_track(page)
 
-    # Phase 2: Click the gate element with natural mouse approach
+    # Phase 2: Engage the gate with the interaction its type demands.
     pre_click_url = page.url
+
+    if gate["type"] == "slider_gate":
+        await _drag_slider_gate(page, gate)
+        await _wait_for_gate_resolution(page, pre_click_url, timeout_remaining)
+        return gate["type"]
+
+    if gate["type"] == "hold_gate":
+        await _press_and_hold_gate(page, gate)
+        await _wait_for_gate_resolution(page, pre_click_url, timeout_remaining)
+        return gate["type"]
+
+    # Everything else is a click, with a natural mouse approach.
     try:
         element = await page.query_selector(gate["selector"])
         if not element and gate["type"] == "verify_button":
@@ -1868,7 +2482,7 @@ async def _attempt_bot_gate_bypass(page, timeout_remaining: float) -> bool:
 
         if not element:
             logger.warning("Bot gate element not found after detection")
-            return True
+            return gate["type"]
 
         box = await element.bounding_box()
         if box:
@@ -1899,18 +2513,15 @@ async def _attempt_bot_gate_bypass(page, timeout_remaining: float) -> bool:
 
     except Exception as e:
         logger.warning("Failed to click bot gate element: %s", e)
-        return True
+        return gate["type"]
 
     # Phase 3: Wait for resolution
-    if (
-        gate.get("hasAutoSubmitForm")
-        or gate["type"] in {"checkbox_gate", "fake_captcha_gate"}
-    ):
+    if gate.get("hasAutoSubmitForm") or gate["type"] in _FORM_SUBMIT_GATE_TYPES:
         await _wait_for_form_submit(page, pre_click_url, timeout_remaining)
     else:
         await _wait_for_gate_resolution(page, pre_click_url, timeout_remaining)
 
-    return True
+    return gate["type"]
 
 
 async def _wait_for_gate_resolution(
@@ -1942,7 +2553,7 @@ async def _wait_for_gate_resolution(
                 const els = document.querySelectorAll(
                     'button, input[type="submit"], [role="button"], span, div'
                 );
-                const pat = /verify|verifying|check|checking|continue|not a robot|confirm|processing|please wait/i;
+                const pat = /verify|verifying|check|checking|continue|not a robot|confirm|processing|please wait|slide to|swipe to|drag to|press (?:and|&) hold|hold to/i;
                 for (const b of els) {
                     const text = (b.textContent || b.value || '').trim();
                     if (text.length > 100) continue;
@@ -1981,7 +2592,7 @@ async def _wait_for_gate_resolution(
                         const els = document.querySelectorAll(
                             'button, input[type="submit"], [role="button"], span, div'
                         );
-                        const pat = /verifying|processing|please wait|checking your browser/i;
+                        const pat = /verifying|processing|please wait|checking your browser|slide to|swipe to|press (?:and|&) hold|hold to/i;
                         for (const b of els) {
                             const text = (b.textContent || b.value || '').trim();
                             if (text.length > 100) continue;
