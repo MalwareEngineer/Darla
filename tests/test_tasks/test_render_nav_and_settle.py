@@ -48,6 +48,23 @@ def test_nav_path_lists_distinct_document_hosts_in_order(tmp_path) -> None:
     ]
 
 
+def test_nav_path_skips_iframe_documents(tmp_path) -> None:
+    """An AiTM login page's session-probe iframe (Me.htm on another
+    subdomain) is a "document" request but not a hop the browser took —
+    it must not show up as the chain's final host."""
+    local = _write_log(tmp_path, [
+        _doc("https://lure.test/"),
+        _doc("https://login.aitm.test/authorize"),
+        {
+            "type": "request", "resource_type": "document",
+            "url": "https://probe.aitm.test/Me.htm?v=3",
+            "headers": {"Sec-Fetch-Dest": "iframe"},
+        },
+    ])
+    kit = SimpleNamespace(discovery_method="browser_render", local_path=local)
+    assert _render_nav_path(kit) == ["lure.test", "login.aitm.test"]
+
+
 def test_nav_path_none_for_non_render_kits(tmp_path) -> None:
     local = _write_log(tmp_path, [_doc("https://a.test/"), _doc("https://b.test/")])
     kit = SimpleNamespace(discovery_method="redirect", local_path=local)

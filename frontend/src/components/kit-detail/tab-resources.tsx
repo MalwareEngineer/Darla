@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { Fragment, useState } from "react";
 import { useKitBrowserResources } from "@/hooks/use-kits";
 import {
   Table,
@@ -42,6 +42,22 @@ function fileIcon(filename: string) {
   }
 }
 
+function statusColor(status?: number | null): string {
+  if (!status) return "text-muted-foreground";
+  if (status >= 200 && status < 300) return "text-green-400";
+  if (status >= 300 && status < 400) return "text-yellow-400";
+  return "text-red-400";
+}
+
+function splitUrl(url: string): { host: string; path: string } {
+  try {
+    const u = new URL(url);
+    return { host: u.hostname, path: u.pathname + u.search };
+  } catch {
+    return { host: "", path: url };
+  }
+}
+
 export function TabResources({ kitId, enabled }: Props) {
   const { data, isLoading } = useKitBrowserResources(kitId, enabled);
   const [expandedRow, setExpandedRow] = useState<number | null>(null);
@@ -65,24 +81,57 @@ export function TabResources({ kitId, enabled }: Props) {
         <Table>
           <TableHeader>
             <TableRow>
-              <TableHead className="w-full">Filename</TableHead>
+              <TableHead className="w-[60px]">Method</TableHead>
+              <TableHead className="w-[60px]">Status</TableHead>
+              <TableHead className="w-full">Source URL / File</TableHead>
+              <TableHead className="w-[70px]">Time</TableHead>
               <TableHead className="w-[80px]">Size</TableHead>
               <TableHead className="w-[140px]">MIME Type</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
-            {resources.map((res, i) => (
-              <>
+            {resources.map((res, i) => {
+              const src = res.url ? splitUrl(res.url) : null;
+              return (
+              <Fragment key={res.filename}>
                 <TableRow
-                  key={res.filename}
                   className={`cursor-pointer hover:bg-muted/50 ${res.content ? "" : "opacity-70"}`}
                   onClick={() => res.content ? setExpandedRow(expandedRow === i ? null : i) : undefined}
                 >
-                  <TableCell className="font-mono text-xs">
+                  <TableCell>
+                    {res.method && (
+                      <Badge
+                        variant={res.method === "GET" ? "secondary" : "default"}
+                        className="text-[10px] px-1.5"
+                      >
+                        {res.method}
+                      </Badge>
+                    )}
+                  </TableCell>
+                  <TableCell className={`font-mono text-xs ${statusColor(res.status)}`}>
+                    {res.status ?? "—"}
+                  </TableCell>
+                  <TableCell className="font-mono text-xs max-w-0">
                     <div className="flex items-center gap-2">
                       {fileIcon(res.filename)}
-                      <span className="truncate" title={res.filename}>{res.filename}</span>
+                      <div className="min-w-0">
+                        {src && (
+                          <div className="truncate" title={res.url ?? undefined}>
+                            <span className="text-muted-foreground">{src.host}</span>
+                            <span>{src.path}</span>
+                          </div>
+                        )}
+                        <div
+                          className={`truncate ${src ? "text-[10px] text-muted-foreground/70" : ""}`}
+                          title={res.filename}
+                        >
+                          {res.filename}
+                        </div>
+                      </div>
                     </div>
+                  </TableCell>
+                  <TableCell className="text-xs text-muted-foreground font-mono whitespace-nowrap">
+                    {res.timestamp != null ? `${res.timestamp.toFixed(1)}s` : "—"}
                   </TableCell>
                   <TableCell className="text-xs text-muted-foreground whitespace-nowrap">
                     {formatBytes(res.size)}
@@ -102,16 +151,17 @@ export function TabResources({ kitId, enabled }: Props) {
                   </TableCell>
                 </TableRow>
                 {expandedRow === i && res.content && (
-                  <TableRow key={`${res.filename}-content`}>
-                    <TableCell colSpan={3} className="bg-muted/30 p-0">
+                  <TableRow>
+                    <TableCell colSpan={6} className="bg-muted/30 p-0">
                       <pre className="text-[11px] font-mono leading-5 p-3 overflow-auto max-h-[600px] m-0 whitespace-pre">
                         {res.content}
                       </pre>
                     </TableCell>
                   </TableRow>
                 )}
-              </>
-            ))}
+              </Fragment>
+              );
+            })}
           </TableBody>
         </Table>
       </div>

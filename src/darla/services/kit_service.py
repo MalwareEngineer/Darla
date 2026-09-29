@@ -7,6 +7,7 @@ import logging
 import mimetypes
 import shutil
 import uuid
+from collections.abc import Awaitable, Callable
 from pathlib import Path
 
 from sqlalchemy import func, or_, select
@@ -22,6 +23,16 @@ from darla.models.kit import Kit, KitStatus
 from darla.services.dispatch import commit_then_dispatch
 
 logger = logging.getLogger(__name__)
+
+# Runs after a new kit is flushed but before the commit that precedes the
+# chain dispatch.  Anything the chain must see on its first read — the
+# investigation link above all — has to be written here: a worker can
+# dequeue the chain the instant it is published, so rows written after
+# dispatch race it (a root kit whose investigation was linked a few ms
+# late spawned its browser_render child with no investigation, dropping
+# it from the tree and letting the investigation complete while the
+# render was still running).
+PrepareKit = Callable[[Kit], Awaitable[None]]
 
 
 class KitService:
@@ -82,6 +93,7 @@ class KitService:
 
     async def submit_kit(
         self, url: str, source_feed: str | None = None, force: bool = False,
+        prepare: PrepareKit | None = None,
     ) -> tuple[Kit, str, bool]:
         # URL dedup: return existing kit if already tracked
         if not force:
@@ -97,6 +109,8 @@ class KitService:
         )
         self.db.add(kit)
         await self.db.flush()
+        if prepare:
+            await prepare(kit)
 
         # Dispatch Celery task
         from darla.tasks.analysis import build_analysis_chain
@@ -113,6 +127,7 @@ class KitService:
         local_path: str,
         source_feed: str | None = None,
         kit_id: uuid.UUID | None = None,
+        prepare: PrepareKit | None = None,
     ) -> tuple[Kit, str]:
         """Submit a locally-stored file for analysis (skip download)."""
         kit = Kit(
@@ -125,6 +140,8 @@ class KitService:
         )
         self.db.add(kit)
         await self.db.flush()
+        if prepare:
+            await prepare(kit)
 
         from darla.tasks.analysis import build_analysis_chain
 
@@ -133,7 +150,8 @@ class KitService:
         return kit, result.id
 
     async def submit_bulk(
-        self, urls: list[str], source_feed: str | None = None
+        self, urls: list[str], source_feed: str | None = None,
+        prepare: PrepareKit | None = None,
     ) -> tuple[list[dict], int, int]:
         """Submit multiple URLs. Returns (results, submitted, skipped)."""
         from darla.tasks.analysis import build_analysis_chain
@@ -162,6 +180,8 @@ class KitService:
             )
             self.db.add(kit)
             await self.db.flush()
+            if prepare:
+                await prepare(kit)
 
             chain = build_analysis_chain(str(kit.id))
             task_result = await commit_then_dispatch(self.db, chain)
@@ -176,7 +196,7 @@ class KitService:
         return results, submitted, skipped
 
     async def submit_bulk_files(
-        self, files: list[dict],
+        self, files: list[dict], prepare: PrepareKit | None = None,
     ) -> list[dict]:
         """Submit multiple locally-stored files for analysis.
 
@@ -197,6 +217,8 @@ class KitService:
             )
             self.db.add(kit)
             await self.db.flush()
+            if prepare:
+                await prepare(kit)
 
             chain = build_analysis_chain(str(kit.id))
             task_result = await commit_then_dispatch(self.db, chain)
@@ -538,15 +560,31 @@ class KitService:
             ".woff": "font/woff",
         }
 
+        # The manifest says which URL / status / request each capture came
+        # from.  Without it, repeat hits on one URL (a lure fetched, re-
+        # fetched after its gate, then POSTed to) are indistinguishable.
+        manifest: dict[str, dict] = {}
+        with contextlib.suppress(OSError, ValueError, TypeError, AttributeError):
+            entries = json.loads(
+                (resources_dir / "_manifest.json").read_text(errors="replace")
+            )
+            for e in entries:
+                name = str(e.get("filename") or "")
+                if name.startswith("_browser_resources/"):
+                    manifest[name.removeprefix("_browser_resources/")] = e
+
         results: list[dict] = []
         for fp in sorted(resources_dir.iterdir()):
-            if not fp.is_file():
+            if not fp.is_file() or fp.name == "_manifest.json":
                 continue
             if len(results) >= 50:
                 break
+            meta = manifest.get(fp.name, {})
             try:
                 size = fp.stat().st_size
-                mime, _ = mimetypes.guess_type(fp.name)
+                mime = (meta.get("content_type") or "").split(";")[0].strip() or None
+                if not mime:
+                    mime, _ = mimetypes.guess_type(fp.name)
                 if not mime:
                     mime = ext_mime_fallback.get(fp.suffix.lower())
                 is_text = (
@@ -571,6 +609,11 @@ class KitService:
                     "mime_type": mime,
                     "content": content,
                     "truncated": truncated,
+                    "url": meta.get("url"),
+                    "status": meta.get("status"),
+                    "method": meta.get("method"),
+                    "timestamp": meta.get("timestamp"),
+                    "request_id": meta.get("request_id"),
                 })
             except OSError:
                 continue

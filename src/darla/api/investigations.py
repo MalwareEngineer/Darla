@@ -60,24 +60,21 @@ async def create_investigation(
             detail="URL is required",
         )
 
-    service = InvestigationService(db)
-    investigation, kit, task_id = await service.create_from_url(
-        str(payload.url), max_depth=payload.max_depth,
-    )
-
-    # Override auto-generated name with user-provided name
-    if payload.name:
-        investigation.name = payload.name
-        await db.flush()
-
-    # Link root kit to actor/campaign/family
     from darla.api.kits import _link_kit_to_entities
 
-    await _link_kit_to_entities(
-        db, kit.id, payload.actor_id, payload.campaign_id, payload.family_id,
-    )
+    async def prepare(investigation, kit) -> None:
+        # Override auto-generated name with user-provided name
+        if payload.name:
+            investigation.name = payload.name
+            await db.flush()
+        await _link_kit_to_entities(
+            db, kit.id, payload.actor_id, payload.campaign_id, payload.family_id,
+        )
 
-    await db.commit()
+    service = InvestigationService(db)
+    investigation, kit, task_id = await service.create_from_url(
+        str(payload.url), max_depth=payload.max_depth, prepare=prepare,
+    )
 
     return InvestigationSubmitResponse(
         investigation_id=investigation.id,
@@ -119,8 +116,25 @@ async def create_investigation_from_file(
     filepath = download_dir / (file.filename or "upload.bin")
     filepath.write_bytes(content)
 
-    # Create kit from file
+    from darla.api.kits import _link_kit_to_entities
     from darla.services.kit_service import KitService
+
+    service = InvestigationService(db)
+    investigation = None
+
+    async def prepare(kit) -> None:
+        # Investigation + links must be committed before the chain is
+        # dispatched — see KitService's PrepareKit.
+        nonlocal investigation
+        investigation = await service.create_from_file(kit, max_depth=max_depth)
+        investigation.name = name
+        await db.flush()
+        await _link_kit_to_entities(
+            db, kit.id,
+            uuid.UUID(actor_id) if actor_id else None,
+            uuid.UUID(campaign_id) if campaign_id else None,
+            uuid.UUID(family_id) if family_id else None,
+        )
 
     kit_service = KitService(db)
     kit, task_id = await kit_service.submit_file(
@@ -128,32 +142,8 @@ async def create_investigation_from_file(
         local_path=str(filepath),
         source_feed="manual",
         kit_id=kit_id,
+        prepare=prepare,
     )
-
-    # Create investigation from the kit
-    service = InvestigationService(db)
-    investigation = await service.create_from_file(kit, max_depth=max_depth)
-    if not investigation:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to create investigation",
-        )
-
-    # Set user-provided name
-    investigation.name = name
-    await db.flush()
-
-    # Link root kit to actor/campaign/family
-    from darla.api.kits import _link_kit_to_entities
-
-    await _link_kit_to_entities(
-        db, kit.id,
-        uuid.UUID(actor_id) if actor_id else None,
-        uuid.UUID(campaign_id) if campaign_id else None,
-        uuid.UUID(family_id) if family_id else None,
-    )
-
-    await db.commit()
 
     return InvestigationSubmitResponse(
         investigation_id=investigation.id,
@@ -288,6 +278,14 @@ def _render_nav_path(kit) -> list[str] | None:
         if not isinstance(e, dict):
             continue
         if e.get("type") != "request" or e.get("resource_type") != "document":
+            continue
+        # Iframes are "document" requests too (an AiTM page's Me.htm
+        # session-probe frame, say) but aren't hops the browser took.
+        headers = e.get("headers") if isinstance(e.get("headers"), dict) else {}
+        dest = next(
+            (v for k, v in headers.items() if k.lower() == "sec-fetch-dest"), None,
+        )
+        if dest in ("iframe", "frame"):
             continue
         host = urlparse(e.get("url") or "").hostname
         if host and (not hosts or hosts[-1] != host):

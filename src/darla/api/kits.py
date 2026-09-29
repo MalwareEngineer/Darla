@@ -99,23 +99,21 @@ async def list_kits(
     dependencies=_ANALYST,
 )
 async def create_kit(payload: KitCreate, db: DbSession) -> KitSubmitResponse:
-    service = KitService(db)
-    kit, task_id, duplicate = await service.submit_kit(
-        str(payload.url), payload.source_feed, force=payload.force,
-    )
+    from darla.services.investigation_service import InvestigationService
 
-    # Auto-create investigation for manual submissions so crawl_chain fires
-    if not duplicate and (payload.source_feed or "manual") == "manual":
-        from darla.services.investigation_service import InvestigationService
-
-        inv_service = InvestigationService(db)
-        await inv_service.create_from_file(kit)
-
-    # Link to actor/campaign/family if specified
-    if not duplicate:
+    async def prepare(kit) -> None:
+        # Auto-create investigation for manual submissions so crawl_chain fires
+        if (payload.source_feed or "manual") == "manual":
+            await InvestigationService(db).create_from_file(kit)
         await _link_kit_to_entities(
             db, kit.id, payload.actor_id, payload.campaign_id, payload.family_id,
         )
+
+    service = KitService(db)
+    kit, task_id, duplicate = await service.submit_kit(
+        str(payload.url), payload.source_feed, force=payload.force,
+        prepare=prepare,
+    )
 
     return KitSubmitResponse(
         kit_id=kit.id,
@@ -158,14 +156,6 @@ async def upload_kit(
     filepath = download_dir / (file.filename or "upload.bin")
     filepath.write_bytes(content)
 
-    service = KitService(db)
-    kit, task_id = await service.submit_file(
-        filename=file.filename or "upload.bin",
-        local_path=str(filepath),
-        source_feed=source_feed,
-        kit_id=kit_id,
-    )
-
     # Auto-create investigation for uploads that may spawn child kits:
     #  - .eml files (contain clickable links)
     #  - Image files (may contain QR codes with phishing URLs)
@@ -173,18 +163,26 @@ async def upload_kit(
     needs_investigation = filename_lower.endswith(".eml") or any(
         filename_lower.endswith(ext) for ext in _IMAGE_EXTS
     )
-    if needs_investigation:
-        from darla.services.investigation_service import InvestigationService
 
-        inv_service = InvestigationService(db)
-        await inv_service.create_from_file(kit)
+    async def prepare(kit) -> None:
+        if needs_investigation:
+            from darla.services.investigation_service import InvestigationService
 
-    # Link to actor/campaign/family if specified
-    await _link_kit_to_entities(
-        db, kit.id,
-        uuid.UUID(actor_id) if actor_id else None,
-        uuid.UUID(campaign_id) if campaign_id else None,
-        uuid.UUID(family_id) if family_id else None,
+            await InvestigationService(db).create_from_file(kit)
+        await _link_kit_to_entities(
+            db, kit.id,
+            uuid.UUID(actor_id) if actor_id else None,
+            uuid.UUID(campaign_id) if campaign_id else None,
+            uuid.UUID(family_id) if family_id else None,
+        )
+
+    service = KitService(db)
+    kit, task_id = await service.submit_file(
+        filename=file.filename or "upload.bin",
+        local_path=str(filepath),
+        source_feed=source_feed,
+        kit_id=kit_id,
+        prepare=prepare,
     )
 
     return KitSubmitResponse(kit_id=kit.id, task_id=task_id)
@@ -234,43 +232,35 @@ async def bulk_upload_kits(
             "local_path": str(filepath),
         })
 
-    service = KitService(db)
-    results = await service.submit_bulk_files(file_entries)
-
-    # Auto-create investigations for .eml uploads
     from darla.services.investigation_service import InvestigationService
 
     inv_service = InvestigationService(db)
-    final_results: list[KitBulkUploadResult] = []
-
-    for entry, result in zip(file_entries, results, strict=False):
-        investigation_id = None
-        fname = entry["filename"].lower()
-        needs_inv = fname.endswith(".eml") or any(
-            fname.endswith(ext) for ext in _IMAGE_EXTS
-        )
-        if needs_inv:
-            kit = await service.get_kit(result["kit_id"])
-            if kit:
-                inv = await inv_service.create_from_file(kit)
-                investigation_id = inv.id if inv else None
-
-        final_results.append(KitBulkUploadResult(
-            filename=result["filename"],
-            kit_id=result["kit_id"],
-            task_id=result["task_id"],
-            investigation_id=investigation_id,
-        ))
-
-    # Link all uploaded kits to actor/campaign/family if specified
     parsed_actor = uuid.UUID(actor_id) if actor_id else None
     parsed_campaign = uuid.UUID(campaign_id) if campaign_id else None
     parsed_family = uuid.UUID(family_id) if family_id else None
-    if parsed_actor or parsed_campaign or parsed_family:
-        for r in final_results:
-            await _link_kit_to_entities(
-                db, r.kit_id, parsed_actor, parsed_campaign, parsed_family,
-            )
+    investigation_ids: dict[uuid.UUID, uuid.UUID] = {}
+
+    async def prepare(kit) -> None:
+        # Auto-create investigations for .eml / image uploads
+        fname = (kit.filename or "").lower()
+        if fname.endswith(".eml") or any(fname.endswith(ext) for ext in _IMAGE_EXTS):
+            inv = await inv_service.create_from_file(kit)
+            investigation_ids[kit.id] = inv.id
+        await _link_kit_to_entities(
+            db, kit.id, parsed_actor, parsed_campaign, parsed_family,
+        )
+
+    service = KitService(db)
+    results = await service.submit_bulk_files(file_entries, prepare=prepare)
+    final_results = [
+        KitBulkUploadResult(
+            filename=r["filename"],
+            kit_id=r["kit_id"],
+            task_id=r["task_id"],
+            investigation_id=investigation_ids.get(r["kit_id"]),
+        )
+        for r in results
+    ]
 
     return KitBulkUploadResponse(
         submitted=len(final_results),
@@ -292,29 +282,22 @@ async def bulk_submit(payload: KitBulkCreate, db: DbSession) -> KitBulkResponse:
             detail="Maximum 500 URLs per bulk request",
         )
 
+    from darla.services.investigation_service import InvestigationService
+
+    inv_service = InvestigationService(db)
+
+    async def prepare(kit) -> None:
+        # Auto-create investigations for manual bulk submissions
+        if (payload.source_feed or "manual") == "manual":
+            await inv_service.create_from_file(kit)
+        await _link_kit_to_entities(
+            db, kit.id, payload.actor_id, payload.campaign_id, payload.family_id,
+        )
+
     service = KitService(db)
     results, submitted, skipped = await service.submit_bulk(
-        [str(u) for u in payload.urls], payload.source_feed
+        [str(u) for u in payload.urls], payload.source_feed, prepare=prepare,
     )
-
-    # Auto-create investigations for manual bulk submissions
-    if (payload.source_feed or "manual") == "manual":
-        from darla.services.investigation_service import InvestigationService
-
-        inv_service = InvestigationService(db)
-        for r in results:
-            if not r["duplicate"]:
-                kit = await service.get_kit(r["kit_id"])
-                if kit:
-                    await inv_service.create_from_file(kit)
-
-    # Link all submitted kits to actor/campaign/family if specified
-    if payload.actor_id or payload.campaign_id or payload.family_id:
-        for r in results:
-            if not r.get("duplicate"):
-                await _link_kit_to_entities(
-                    db, r["kit_id"], payload.actor_id, payload.campaign_id, payload.family_id,
-                )
 
     return KitBulkResponse(
         submitted=submitted,
