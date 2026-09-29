@@ -193,6 +193,12 @@ class BrowserResourceItem(BaseModel):
     mime_type: str | None = None
     content: str | None = None
     truncated: bool = False
+    # From _browser_resources/_manifest.json — where the capture came from.
+    url: str | None = None
+    status: int | None = None
+    method: str | None = None
+    timestamp: float | None = None
+    request_id: int | None = None
 
 
 class BrowserResourcesResponse(BaseModel):

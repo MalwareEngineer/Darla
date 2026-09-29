@@ -435,6 +435,11 @@ export interface ScreenshotsResponse {
 }
 
 export interface NetworkEvent {
+  /** Per-request sequence id shared by a request and its response.
+   *  Absent in logs captured before ids were recorded. */
+  id?: number | null;
+  /** On a request: id of the redirect hop that led to it. */
+  redirected_from?: number;
   url: string;
   method?: string;
   status?: number;
@@ -456,6 +461,11 @@ export interface BrowserResourceItem {
   mime_type?: string;
   content?: string;
   truncated: boolean;
+  url?: string | null;
+  status?: number | null;
+  method?: string | null;
+  timestamp?: number | null;
+  request_id?: number | null;
 }
 
 export interface BrowserResourcesResponse {

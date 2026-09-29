@@ -60,6 +60,49 @@ function hostname(url: string): string {
   }
 }
 
+/**
+ * One row per request, in the order the browser issued them.
+ *
+ * A URL does not identify a request: a lure page is routinely hit several
+ * times in one render (GET, redirect-to-self, image beacon, form POST), and
+ * keying rows by URL collapsed those into a single row carrying the *last*
+ * method/status at the *first* position — a POST shown before the gate XHRs
+ * it followed.  Logs carry a per-request ``id`` now; older logs without one
+ * pair each response with the earliest unanswered request for its URL,
+ * which is exact for sequential redirect hops.
+ */
+function pairEvents(events: NetworkEvent[]): PairedEvent[] {
+  const rows: PairedEvent[] = [];
+  const byId = new Map<number, PairedEvent>();
+  const openByUrl = new Map<string, PairedEvent[]>();
+
+  for (const e of events) {
+    if (e.type === "request") {
+      const row: PairedEvent = { url: e.url, request: e };
+      rows.push(row);
+      if (e.id != null) byId.set(e.id, row);
+      const open = openByUrl.get(e.url) ?? [];
+      open.push(row);
+      openByUrl.set(e.url, open);
+      continue;
+    }
+
+    let row = e.id != null ? byId.get(e.id) : undefined;
+    if (!row) {
+      const open = openByUrl.get(e.url) ?? [];
+      while (open.length && open[0].response) open.shift();
+      row = open.shift();
+    }
+    if (!row || row.response) {
+      // Response with no captured request (e.g. served from a worker).
+      row = { url: e.url };
+      rows.push(row);
+    }
+    row.response = e;
+  }
+  return rows;
+}
+
 export function TabNetwork({ kitId, enabled }: Props) {
   const { data, isLoading } = useKitNetworkLog(kitId, enabled);
   const [typeFilter, setTypeFilter] = useState("all");
@@ -67,27 +110,7 @@ export function TabNetwork({ kitId, enabled }: Props) {
 
   const events = useMemo(() => data?.events ?? [], [data]);
 
-  // Pair requests with responses by URL
-  const paired = useMemo(() => {
-    const map = new Map<string, PairedEvent>();
-    const ordered: PairedEvent[] = [];
-
-    for (const e of events) {
-      const key = e.url;
-      if (!map.has(key)) {
-        const entry: PairedEvent = { url: key };
-        map.set(key, entry);
-        ordered.push(entry);
-      }
-      const entry = map.get(key)!;
-      if (e.type === "request") {
-        entry.request = e;
-      } else {
-        entry.response = e;
-      }
-    }
-    return ordered;
-  }, [events]);
+  const paired = useMemo(() => pairEvents(events), [events]);
 
   const resourceTypes = useMemo(() => {
     const types = new Set<string>();

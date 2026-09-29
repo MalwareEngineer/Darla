@@ -36,9 +36,13 @@ class InvestigationService:
         return result.scalar_one_or_none()
 
     async def create_from_url(
-        self, url: str, max_depth: int = 5
+        self, url: str, max_depth: int = 5, prepare=None,
     ) -> tuple[Investigation, Kit, str]:
-        """Create an investigation starting from a URL."""
+        """Create an investigation starting from a URL.
+
+        ``prepare(investigation, kit)`` runs before the commit that precedes
+        dispatch (see ``kit_service.PrepareKit`` for why that matters).
+        """
         kit = Kit(
             id=uuid.uuid4(),
             source_url=url,
@@ -60,6 +64,8 @@ class InvestigationService:
         await self.db.flush()
 
         kit.investigation_id = investigation.id
+        if prepare:
+            await prepare(investigation, kit)
 
         from darla.tasks.analysis import build_analysis_chain
 

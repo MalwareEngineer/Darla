@@ -532,8 +532,10 @@ async def _register_cloak_routes(page) -> None:
             )
 
 
-# Text that marks an interstitial/loading state rather than final content.
-# Presence keeps the settle loop waiting; it never forces a capture.
+# Visible-text phrases that mark an interstitial/loading state rather than
+# final content.  Matched against body.innerText (see _settle_final_page),
+# so these only trigger when actually shown; presence keeps the settle loop
+# waiting but never forces a capture.
 _LOADING_MARKERS = (
     "preparing secure session", "please wait", "just a moment", "one moment",
     "redirecting", "loading", "checking your browser", "one last check",
@@ -556,10 +558,27 @@ async def _settle_final_page(
     a content rewrite (fetch→document.write), or a visible spinner each
     reset the streak.  Bounded by ``max_seconds`` so a page that animates
     forever is still captured best-effort.
+
+    Loading markers are matched against the page's *visible* text
+    (``body.innerText``), not raw HTML: a hidden ``loading-overlay`` div
+    or a ``lazy-loading`` CSS class in the source is not a spinner and
+    must not force the full ``max_seconds`` wait on an otherwise-stable
+    credential page.
     """
+    async def _visible_text() -> str:
+        try:
+            return (await page.inner_text("body")).lower()
+        except Exception:
+            return ""
+
     deadline = asyncio.get_event_loop().time() + max_seconds
-    prev_url: str | None = None
-    prev_len = -1
+    # Seed from the current state so an already-stable page settles in
+    # ``stable_needed`` checks rather than one extra.
+    prev_url: str | None = page.url
+    try:
+        prev_len = len(await page.content())
+    except Exception:
+        prev_len = -1
     streak = 0
     saw_loading = False
     while asyncio.get_event_loop().time() < deadline:
@@ -571,8 +590,8 @@ async def _settle_final_page(
             # Navigation in flight — the page is clearly not settled yet.
             streak = 0
             continue
-        text = content[:4000].lower()
-        loading = any(m in text for m in _LOADING_MARKERS)
+        visible = await _visible_text()
+        loading = any(m in visible for m in _LOADING_MARKERS)
         saw_loading = saw_loading or loading
         changed = url != prev_url or abs(len(content) - prev_len) > 64
         prev_url, prev_len = url, len(content)
@@ -644,6 +663,13 @@ async def _async_browser_download(
     captured_responses: list[dict] = []
     response_counter = 0
     nav_start_time = 0.0
+    # Per-request sequence ids, so responses pair with the exact request
+    # that produced them.  URLs don't identify a request: a lure page is
+    # typically hit several times (GET, redirect-to-self, image beacon,
+    # form POST) and URL-keyed pairing collapses those into one row.
+    # Keyed by the Playwright Request object (``response.request`` hands
+    # back the same object).
+    request_ids: dict = {}
 
     # WebSocket capture state — AITM cred-relay kits drive credential
     # exfil through wss:// frames that never appear as HTTP requests.
@@ -657,14 +683,22 @@ async def _async_browser_download(
         """Log every outgoing request."""
         nonlocal nav_start_time
         elapsed = time.monotonic() - nav_start_time if nav_start_time else 0
-        network_log.append({
+        req_id = len(request_ids) + 1
+        request_ids[request] = req_id
+        entry = {
+            "id": req_id,
             "url": request.url,
             "method": request.method,
             "resource_type": request.resource_type,
             "headers": dict(request.headers),
             "timestamp": round(elapsed, 3),
             "type": "request",
-        })
+        }
+        with contextlib.suppress(Exception):
+            prev = request.redirected_from
+            if prev is not None and prev in request_ids:
+                entry["redirected_from"] = request_ids[prev]
+        network_log.append(entry)
 
     def _ws_record_frame(direction: str, ws_url: str, payload) -> None:
         """Append a WebSocket frame to the capture log, bounded."""
@@ -728,8 +762,15 @@ async def _async_browser_download(
         nonlocal response_counter, nav_start_time
         elapsed = time.monotonic() - nav_start_time if nav_start_time else 0
 
+        req_id = None
+        method = None
+        with contextlib.suppress(Exception):
+            req_id = request_ids.get(response.request)
+            method = response.request.method
         entry = {
+            "id": req_id,
             "url": response.url,
+            "method": method,
             "status": response.status,
             "content_type": response.headers.get("content-type", ""),
             "headers": dict(response.headers),
@@ -751,6 +792,9 @@ async def _async_browser_download(
                         "content_type": ct,
                         "body": body,
                         "index": response_counter,
+                        "request_id": req_id,
+                        "method": method,
+                        "timestamp": round(elapsed, 3),
                     })
             except Exception:
                 pass  # Response may be closed/redirected
@@ -979,6 +1023,9 @@ async def _async_browser_download(
                                 "content_type", "text/html",
                             ),
                             "index": initial_resp.get("index", 0),
+                            "request_id": initial_resp.get("request_id"),
+                            "method": initial_resp.get("method"),
+                            "timestamp": initial_resp.get("timestamp"),
                             "role": "initial",
                         })
                         saved_initial_html = True
@@ -1042,6 +1089,9 @@ async def _async_browser_download(
                             "status": resp.get("status"),
                             "content_type": resp.get("content_type", ""),
                             "index": resp["index"],
+                            "request_id": resp.get("request_id"),
+                            "method": resp.get("method"),
+                            "timestamp": resp.get("timestamp"),
                         })
                     except Exception as e:
                         logger.debug(
