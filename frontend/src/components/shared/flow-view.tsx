@@ -2,6 +2,7 @@ import { Link } from "react-router-dom";
 import { ChevronRight, Package, Layers } from "lucide-react";
 import { StageRoleBadge } from "@/components/shared/stage-role-badge";
 import { KitStatusBadge } from "@/components/shared/kit-status-badge";
+import { useKitScreenshots } from "@/hooks/use-kits";
 import { cn } from "@/lib/utils";
 import type { FlowKitNode, FlowStageNode, KitStatus } from "@/types/api";
 
@@ -21,7 +22,7 @@ function navLabel(method?: string | null): string {
   );
 }
 
-function StageChip({ stage }: { stage: FlowStageNode }) {
+function StageChip({ stage, thumb }: { stage: FlowStageNode; thumb?: string }) {
   return (
     <Link
       to={`/stages/${stage.id}`}
@@ -29,6 +30,14 @@ function StageChip({ stage }: { stage: FlowStageNode }) {
       title={stage.url ?? undefined}
     >
       <StageRoleBadge role={stage.role} />
+      {thumb && (
+        <img
+          src={thumb}
+          alt=""
+          loading="lazy"
+          className="h-20 w-full rounded border border-border object-cover object-top"
+        />
+      )}
       <span className="font-mono text-[11px] text-muted-foreground truncate max-w-[180px]">
         {stage.host ?? stage.url ?? "—"}
       </span>
@@ -49,6 +58,17 @@ function StageChip({ stage }: { stage: FlowStageNode }) {
 }
 
 function KitFlowRow({ node, depth }: { node: FlowKitNode; depth: number }) {
+  // Fetch this kit's screenshots once and match each stage to its shot by
+  // filename basename (stage.screenshot_path is relative, e.g.
+  // "_screenshots/02c_lure_cta.png"). Uses the existing authed endpoint so
+  // it works under OIDC as well as disabled mode.
+  const hasShots = node.stages.some((s) => s.screenshot_path);
+  const { data: shots } = useKitScreenshots(node.kit_id, hasShots);
+  const thumbFor = (path?: string | null): string | undefined => {
+    if (!path || !shots) return undefined;
+    const base = path.split("/").pop();
+    return shots.screenshots.find((s) => s.filename === base)?.data_uri;
+  };
   return (
     <div>
       <div
@@ -84,7 +104,7 @@ function KitFlowRow({ node, depth }: { node: FlowKitNode; depth: number }) {
                     <span className="text-[9px] -mt-1">{navLabel(stage.nav_method)}</span>
                   </div>
                 )}
-                <StageChip stage={stage} />
+                <StageChip stage={stage} thumb={thumbFor(stage.screenshot_path)} />
               </div>
             ))}
           </div>

@@ -655,6 +655,7 @@ def _assemble_stages_manifest(
     final_url: str,
     final_content: str,
     final_visible_text: str,
+    screenshot_log: list[dict] | None = None,
 ) -> tuple[list[dict], dict[str, str]]:
     """Build the ``stages.json`` manifest + per-stage body files.
 
@@ -726,16 +727,43 @@ def _assemble_stages_manifest(
             "markers": _stage_markers(body_text, url),
         })
 
-    # Best-effort screenshot assignment: the first stage gets the landing
-    # shot, a bot-check stage the bot-check shot, the final stage the
-    # phish shot.  Purely cosmetic for the flow view.
+    # Screenshot assignment.  Every screenshot was tagged with the
+    # ``doc_seq`` in effect when it was taken (see ``_snap``), so a shot
+    # maps to the stage whose page was on screen at capture time — the
+    # CTA-click / email-gate shots land on their real stage instead of
+    # being dropped.  We keep the LAST shot per seq (the most-settled
+    # state of that page), and prefer a "blank" landing capture over a
+    # post-interaction one for the same stage so the flow shows what the
+    # victim first saw.  Falls back to the old first→landing / last→phish
+    # heuristic when no tagged log is available (older renders).
     if manifest:
-        manifest[0]["screenshot_file"] = "_screenshots/01_landing.png"
-        manifest[-1]["screenshot_file"] = "_screenshots/03_phish.png"
-        for m in manifest:
-            if m["markers"].get("turnstile"):
-                m["screenshot_file"] = "_screenshots/02_bot_check.png"
-                break
+        assigned: dict[int, str] = {}
+        for entry in screenshot_log or []:
+            seq = entry.get("seq")
+            rel = entry.get("file")
+            if seq is None or not rel:
+                continue
+            # A *_blank capture wins for its stage; otherwise last-write.
+            if entry.get("blank") or seq not in assigned:
+                assigned[seq] = rel
+        seq_to_stage = {m["seq"]: m for m in manifest}
+        for seq, rel in assigned.items():
+            if seq in seq_to_stage:
+                seq_to_stage[seq]["screenshot_file"] = rel
+
+        if not assigned:
+            manifest[0]["screenshot_file"] = "_screenshots/01_landing.png"
+            manifest[-1]["screenshot_file"] = "_screenshots/03_phish.png"
+            for m in manifest:
+                if m["markers"].get("turnstile"):
+                    m["screenshot_file"] = "_screenshots/02_bot_check.png"
+                    break
+        else:
+            # Ensure the terminal stage always has *some* shot.
+            if not manifest[-1]["screenshot_file"]:
+                manifest[-1]["screenshot_file"] = "_screenshots/03_phish.png"
+            if not manifest[0]["screenshot_file"]:
+                manifest[0]["screenshot_file"] = "_screenshots/01_landing.png"
     return manifest, bodies
 
 
@@ -813,6 +841,27 @@ async def _async_browser_download(
     # loaded them, and ``main_frame_navs`` records the ordered pages.
     doc_seq = 0
     main_frame_navs: list[dict] = []
+
+    # Screenshots tagged with the doc_seq in effect when taken, so
+    # ``_assemble_stages_manifest`` can attach each shot to the stage
+    # whose page was on screen (CTA-click / email-gate captures land on
+    # their real stage instead of being dropped).
+    screenshot_log: list[dict] = []
+
+    async def _snap(label: str, *, blank: bool = False):
+        """Take a labelled screenshot and record its doc_seq for stage mapping."""
+        p = await _take_screenshot(page, screenshots_dir, label)
+        if p is not None:
+            screenshot_log.append({
+                "seq": doc_seq,
+                "file": f"_screenshots/{label}.png",
+                "blank": blank,
+            })
+        return p
+
+    async def _snap_email_blank():
+        """Capture the blank email-entry landing before the honey fill."""
+        await _snap(f"{doc_seq:02d}_email_blank", blank=True)
 
     def _on_framenav(frame):
         """Record each top-level (main-frame) navigation as a new stage."""
@@ -1002,7 +1051,7 @@ async def _async_browser_download(
             await asyncio.sleep(random.uniform(3.0, 5.0))
 
             # Screenshot: landing page (stage 1 — what the browser first shows)
-            await _take_screenshot(page, screenshots_dir, "01_landing")
+            await _snap("01_landing")
 
             # Track whether a lure CTA button was already clicked
             cta_clicked = False
@@ -1042,14 +1091,14 @@ async def _async_browser_download(
 
             # Screenshot: after Turnstile/bot check (stage 2) — only if Turnstile was present
             if turnstile_result != "absent":
-                await _take_screenshot(page, screenshots_dir, "02_bot_check")
+                await _snap("02_bot_check")
 
                 # Post-Turnstile: click CTA buttons that gate the real content
                 # (e.g. "Verify to Play" voicemail lures, device-code phish)
                 if turnstile_result == "solved":
-                    cta_clicked = await _click_lure_cta(page)
+                    cta_clicked = await _click_lure_cta(page, on_email_gate=_snap_email_blank)
                     if cta_clicked:
-                        await _take_screenshot(page, screenshots_dir, "02b_post_cta")
+                        await _snap("02b_post_cta")
 
             # Simulate minimal human behavior to pass behavioral checks
             await _simulate_human_behavior(page)
@@ -1084,9 +1133,9 @@ async def _async_browser_download(
             # no bot gate (QR code landers, link-through pages), or pages
             # where the gate resolved and revealed a CTA.
             if not cta_clicked:
-                cta_clicked = await _click_lure_cta(page)
+                cta_clicked = await _click_lure_cta(page, on_email_gate=_snap_email_blank)
                 if cta_clicked:
-                    await _take_screenshot(page, screenshots_dir, "02c_lure_cta")
+                    await _snap("02c_lure_cta")
 
             # Wait for final content to settle
             with contextlib.suppress(TimeoutError, Exception):
@@ -1114,11 +1163,11 @@ async def _async_browser_download(
             # so the honey credential actually reaches the form.  Bounded
             # to a couple of iterations for multi-step gates.
             for _gate_attempt in range(2):
-                gate = await _fill_email_gate(page)
+                gate = await _fill_email_gate(page, on_gate=_snap_email_blank)
                 if gate != GATE_FILLED:
                     break
                 cta_clicked = True  # interaction-driven — suppresses rerender
-                await _take_screenshot(page, screenshots_dir, "02d_email_gate")
+                await _snap("02d_email_gate")
                 await _submit_email_gate(page)
                 with contextlib.suppress(TimeoutError, Exception):
                     await asyncio.wait_for(
@@ -1127,7 +1176,7 @@ async def _async_browser_download(
                 await _settle_final_page(page)
 
             # Screenshot: final phishing page (stage 3)
-            await _take_screenshot(page, screenshots_dir, "03_phish")
+            await _snap("03_phish")
 
             # Capture final page content
             content = await page.content()
@@ -1319,6 +1368,7 @@ async def _async_browser_download(
                 stage_manifest, stage_bodies = _assemble_stages_manifest(
                     main_frame_navs, captured_responses,
                     final_url or url, content, final_visible_text,
+                    screenshot_log,
                 )
                 if stage_manifest:
                     stages_dir = dest_path / "_stages"
@@ -1561,7 +1611,7 @@ async def _submit_email_gate(page) -> None:
             await page.keyboard.press("Enter")
 
 
-async def _fill_email_gate(page) -> str:
+async def _fill_email_gate(page, on_gate=None) -> str:
     """Type the honey credential into a visible, empty email field.
 
     Email-gated lures validate the address server-side against the one the
@@ -1570,6 +1620,11 @@ async def _fill_email_gate(page) -> str:
     captured.  Returns ``GATE_FILLED``, ``GATE_NONE`` (no gate), or
     ``GATE_UNFILLED`` (gate present, no ``PK_HONEY_EMAIL`` configured —
     the caller must not submit it blank).
+
+    ``on_gate`` is an optional async callback invoked once, the moment an
+    empty fillable gate is found and *before* anything is typed — so the
+    caller can screenshot the blank email-entry landing as the victim
+    first saw it.
     """
     from darla.config import get_settings
 
@@ -1587,6 +1642,9 @@ async def _fill_email_gate(page) -> str:
                 continue
             if (await field.input_value()).strip():
                 continue
+            if on_gate is not None:
+                with contextlib.suppress(Exception):
+                    await on_gate()
             if not honey_email:
                 logger.info(
                     "Lure email gate detected but PK_HONEY_EMAIL is unset — "
@@ -1603,7 +1661,7 @@ async def _fill_email_gate(page) -> str:
     return GATE_NONE
 
 
-async def _click_lure_cta(page) -> bool:
+async def _click_lure_cta(page, on_email_gate=None) -> bool:
     """Click a prominent CTA button/link that gates the real phishing content.
 
     Covers multiple lure types:
@@ -1613,9 +1671,12 @@ async def _click_lure_cta(page) -> bool:
     - Email gates ("Enter the email that got the document") — the honey
       credential is typed first, then the CTA (or Enter) submits it
 
+    ``on_email_gate`` is forwarded to :func:`_fill_email_gate` so the
+    caller can capture the blank email-entry landing before it's filled.
+
     Returns True if a CTA was found and clicked (or a filled gate submitted).
     """
-    gate = await _fill_email_gate(page)
+    gate = await _fill_email_gate(page, on_gate=on_email_gate)
     if gate == GATE_UNFILLED:
         return False
     email_filled = gate == GATE_FILLED
