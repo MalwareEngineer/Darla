@@ -7,6 +7,8 @@ first/last stages carry a shot.
 """
 
 from darla.analysis.browser_downloader import _assemble_stages_manifest
+from darla.analysis.staging import build_stage_specs
+from darla.models.stage import StageRole
 
 
 def _navs():
@@ -89,3 +91,26 @@ def test_terminal_stage_always_has_a_shot():
     )
     assert manifest[-1]["screenshot_file"] == "_screenshots/03_phish.png"
     assert manifest[1]["screenshot_file"] == "_screenshots/02c_lure_cta.png"
+
+
+def test_email_gate_seq_stamps_role_even_when_body_lacks_marker():
+    # The gate appeared transiently: the captured stage body shows no email
+    # marker, but the render observed the gate at this doc_seq. The stamped
+    # marker must make classify_role return EMAIL_GATE, not INTERSTITIAL.
+    navs = [
+        {"seq": 0, "url": "https://x.com/", "started_ts": 0.0},
+        {"seq": 1, "url": "https://x.com/gate", "started_ts": 3.0},
+        {"seq": 2, "url": "https://login.x.com/", "started_ts": 6.0},
+    ]
+    responses = [
+        {"url": "https://x.com/gate", "status": 200, "content_type": "text/html",
+         "body": "<html><body>please wait, loading…</body></html>",
+         "index": 1, "timestamp": 3.5},
+    ]
+    manifest, _ = _assemble_stages_manifest(
+        navs, responses, "https://login.x.com/", "<html>login</html>", "login",
+        None, {1},
+    )
+    specs = build_stage_specs(manifest, [], [])
+    by_seq = {s.seq: s for s in specs}
+    assert by_seq[1].role == StageRole.EMAIL_GATE

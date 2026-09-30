@@ -656,6 +656,7 @@ def _assemble_stages_manifest(
     final_content: str,
     final_visible_text: str,
     screenshot_log: list[dict] | None = None,
+    email_gate_seqs: set[int] | None = None,
 ) -> tuple[list[dict], dict[str, str]]:
     """Build the ``stages.json`` manifest + per-stage body files.
 
@@ -712,6 +713,13 @@ def _assemble_stages_manifest(
         if body_text:
             bodies[body_file] = body_text
 
+        markers = _stage_markers(body_text, url)
+        # The render observed an email gate at this doc_seq even if the
+        # captured body no longer shows it (transient step machine) — stamp
+        # it so the stage classifies as email_gate, not interstitial.
+        if email_gate_seqs and seq in email_gate_seqs:
+            markers["email_gate_present"] = True
+
         manifest.append({
             "seq": seq,
             "url": url,
@@ -724,7 +732,7 @@ def _assemble_stages_manifest(
             "started_ts": started,
             "ended_ts": ended,
             "visible_text": visible,
-            "markers": _stage_markers(body_text, url),
+            "markers": markers,
         })
 
     # Screenshot assignment.  Every screenshot was tagged with the
@@ -858,6 +866,10 @@ async def _async_browser_download(
     # whose page was on screen (CTA-click / email-gate captures land on
     # their real stage instead of being dropped).
     screenshot_log: list[dict] = []
+    # doc_seq(s) at which an email gate was detected/filled — the render
+    # knows this even when the gate appears transiently between captured
+    # documents, so it stamps the role that body-marker sniffing misses.
+    email_gate_seqs: set[int] = set()
 
     async def _snap(label: str, *, blank: bool = False):
         """Take a labelled screenshot and record its doc_seq for stage mapping."""
@@ -872,6 +884,7 @@ async def _async_browser_download(
 
     async def _snap_email_blank():
         """Capture the blank email-entry landing before the honey fill."""
+        email_gate_seqs.add(doc_seq)
         await _snap(f"{doc_seq:02d}_email_blank", blank=True)
 
     def _on_framenav(frame):
@@ -1384,7 +1397,7 @@ async def _async_browser_download(
                 stage_manifest, stage_bodies = _assemble_stages_manifest(
                     main_frame_navs, captured_responses,
                     final_url or url, content, final_visible_text,
-                    screenshot_log,
+                    screenshot_log, email_gate_seqs,
                 )
                 if stage_manifest:
                     stages_dir = dest_path / "_stages"
