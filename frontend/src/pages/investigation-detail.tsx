@@ -1,6 +1,8 @@
 import { useState } from "react";
 import { useParams, Link, useNavigate } from "react-router-dom";
 import { useInvestigation, useInvestigationTree, useUpdateInvestigation, useDeleteInvestigation } from "@/hooks/use-investigations";
+import { useInvestigationFlow } from "@/hooks/use-stages";
+import { FlowView } from "@/components/shared/flow-view";
 import { EditableDescription } from "@/components/shared/editable-description";
 import { KitStatusBadge } from "@/components/shared/kit-status-badge";
 import { PageLoading } from "@/components/shared/loading";
@@ -20,6 +22,7 @@ export function InvestigationDetailPage() {
   const navigate = useNavigate();
   const { data: inv, isLoading } = useInvestigation(id!);
   const { data: tree } = useInvestigationTree(id!);
+  const { data: flow } = useInvestigationFlow(id!);
   const updateMutation = useUpdateInvestigation();
   const deleteMutation = useDeleteInvestigation();
   const [deleteOpen, setDeleteOpen] = useState(false);
@@ -113,6 +116,18 @@ export function InvestigationDetailPage() {
           </CardContent>
         </Card>
       )}
+
+      <Card>
+        <CardHeader className="flex-row items-center justify-between space-y-0">
+          <CardTitle className="text-sm font-medium">Attack Flow</CardTitle>
+          <Link to={`/flow-diff?a=${id}`} className="text-xs text-primary hover:underline">
+            Compare with another flow →
+          </Link>
+        </CardHeader>
+        <CardContent>
+          <FlowView nodes={flow ?? []} />
+        </CardContent>
+      </Card>
 
       <Card>
         <CardHeader>

@@ -20,6 +20,12 @@ from darla.schemas.investigation import (
     InvestigationUpdate,
 )
 from darla.schemas.kit import KitSummary
+from darla.schemas.stage import (
+    FlowDiffPair,
+    FlowDiffResponse,
+    FlowKitNode,
+    FlowStageNode,
+)
 from darla.services.investigation_service import InvestigationService
 
 router = APIRouter()
@@ -250,6 +256,118 @@ async def get_investigation_kits(
         "items": [KitSummary.model_validate(k) for k in page],
         "total": total,
     }
+
+
+@router.get("/{investigation_id}/flow", response_model=list[FlowKitNode])
+async def get_investigation_flow(
+    investigation_id: uuid.UUID,
+    db: DbSession,
+) -> list[FlowKitNode]:
+    """Parent→child kit tree, each kit carrying its ordered stages.
+
+    This is the data behind the flow view: the tree structure preserves
+    the attack's branch points (email → link vs QR vs attachment) while
+    each node expands into the pages the victim was actually walked
+    through (lure → bot check → interstitial → AiTM proxy).
+    """
+    from darla.services.stage_service import StageService
+
+    service = InvestigationService(db)
+    investigation = await service.get_investigation(investigation_id)
+    if not investigation:
+        raise HTTPException(status_code=404, detail="Investigation not found")
+
+    kits = await service.get_kit_tree(investigation_id)
+    stage_service = StageService(db)
+    stages = await stage_service.stages_for_investigation(investigation_id)
+    stages_by_kit: dict[uuid.UUID, list] = {}
+    for st in stages:
+        stages_by_kit.setdefault(st.kit_id, []).append(st)
+
+    nodes: dict[uuid.UUID, FlowKitNode] = {}
+    for kit in kits:
+        kit_stages = sorted(stages_by_kit.get(kit.id, []), key=lambda s: s.seq)
+        nodes[kit.id] = FlowKitNode(
+            kit_id=kit.id,
+            source_url=kit.source_url,
+            discovery_method=kit.discovery_method,
+            chain_depth=kit.chain_depth,
+            status=kit.status.value if hasattr(kit.status, "value") else str(kit.status),
+            stages=[
+                FlowStageNode(
+                    id=s.id, kit_id=s.kit_id, seq=s.seq, url=s.url, host=s.host,
+                    role=s.role.value, nav_method=s.nav_method,
+                    screenshot_path=s.screenshot_path, dwell_seconds=s.dwell_seconds,
+                    aitm_baseline=s.aitm_baseline,
+                    resource_count=len(s.stage_resources),
+                )
+                for s in kit_stages
+            ],
+        )
+
+    roots: list[FlowKitNode] = []
+    for kit in kits:
+        node = nodes[kit.id]
+        if kit.parent_kit_id and kit.parent_kit_id in nodes:
+            nodes[kit.parent_kit_id].children.append(node)
+        else:
+            roots.append(node)
+    return roots
+
+
+@router.get(
+    "/{investigation_id}/flow-diff/{other_id}",
+    response_model=FlowDiffResponse,
+)
+async def flow_diff(
+    investigation_id: uuid.UUID,
+    other_id: uuid.UUID,
+    db: DbSession,
+) -> FlowDiffResponse:
+    """Stage-by-stage diff of two investigations' attack flows.
+
+    Aligns the two flows by stage role (sequence alignment, so a stage
+    present in only one side shows as a gap) and reports a per-pair
+    verdict: *bot check same, interstitial only in A, AiTM different
+    backend*.  This is the "compare one investigation's flow to another"
+    comparison the stage model exists to serve.
+    """
+    from darla.analysis.stage_compare import align_flows
+    from darla.services.stage_service import StageService, stage_to_fingerprint
+
+    service = InvestigationService(db)
+    inv_a = await service.get_investigation(investigation_id)
+    inv_b = await service.get_investigation(other_id)
+    if not inv_a or not inv_b:
+        raise HTTPException(status_code=404, detail="Investigation not found")
+
+    stage_service = StageService(db)
+    stages_a = await stage_service.stages_for_investigation(investigation_id)
+    stages_b = await stage_service.stages_for_investigation(other_id)
+
+    # Only stages that carry comparison weight, in flow order.
+    fp_a = [stage_to_fingerprint(s) for s in stages_a]
+    fp_b = [stage_to_fingerprint(s) for s in stages_b]
+
+    pairs_raw = align_flows(fp_a, fp_b)
+    pairs: list[FlowDiffPair] = []
+    for p in pairs_raw:
+        a_stage = stages_a[p.a_index] if p.a_index is not None else None
+        b_stage = stages_b[p.b_index] if p.b_index is not None else None
+        pairs.append(FlowDiffPair(
+            kind=p.kind,
+            role=p.role,
+            a_stage_id=str(a_stage.id) if a_stage else None,
+            b_stage_id=str(b_stage.id) if b_stage else None,
+            a_host=a_stage.host if a_stage else None,
+            b_host=b_stage.host if b_stage else None,
+            comparison=p.comparison,
+        ))
+    return FlowDiffResponse(
+        investigation_a=investigation_id,
+        investigation_b=other_id,
+        pairs=pairs,
+    )
 
 
 def _render_nav_path(kit) -> list[str] | None:

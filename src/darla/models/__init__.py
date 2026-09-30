@@ -21,6 +21,8 @@ from darla.models.indicator import Indicator, IndicatorType
 from darla.models.investigation import Investigation, InvestigationStatus
 from darla.models.kit import Kit, KitStatus
 from darla.models.monitored_domain import MonitoredDomain
+from darla.models.resource import Resource, StageResource
+from darla.models.stage import Stage, StageRole
 from darla.models.user import User, UserRole
 from darla.models.victim import (
     KitVictim,
@@ -47,6 +49,10 @@ __all__ = [
     "KitStatus",
     "KitVictim",
     "MonitoredDomain",
+    "Resource",
+    "Stage",
+    "StageResource",
+    "StageRole",
     "User",
     "UserRole",
     "Victim",

@@ -19,6 +19,7 @@ if TYPE_CHECKING:
     from darla.models.family import Family
     from darla.models.indicator import Indicator
     from darla.models.investigation import Investigation
+    from darla.models.stage import Stage
 
 
 class KitStatus(enum.StrEnum):
@@ -120,6 +121,12 @@ class Kit(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     )
     actors: Mapped[list[Actor]] = relationship(
         secondary="kit_actors", back_populates="kits"
+    )
+    stages: Mapped[list[Stage]] = relationship(
+        back_populates="kit",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+        order_by="Stage.seq",
     )
 
     __table_args__ = (

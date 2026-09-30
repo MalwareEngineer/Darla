@@ -354,6 +354,24 @@ def download_kit(
         kit.mime_type = mime_map.get(suffix, "application/octet-stream")
         db.commit()
 
+        # If the redirect tracker wrote a stage manifest (JS/meta hops),
+        # segment the chain into stages for the flow view.  Own
+        # transaction, best-effort — never fails the download.
+        if kit.investigation_id and redirect_chain_data:
+            try:
+                from darla.services.stage_service import build_and_store_stages
+
+                build_and_store_stages(db, kit, download_dir)
+                db.commit()
+            except Exception as stage_err:
+                logger.debug(
+                    "Kit %s: root stage segmentation failed: %s",
+                    kit_id, stage_err,
+                )
+                import contextlib as _cl
+                with _cl.suppress(Exception):
+                    db.rollback()
+
         logger.info(
             "Kit %s downloaded: %s (%d bytes)",
             kit_id, filepath.name, kit.file_size,

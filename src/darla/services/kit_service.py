@@ -903,6 +903,19 @@ class KitService:
 
         settings = get_settings()
 
+        # Browser-render kits: the authoritative page is the rendered DOM
+        # saved as ``page.html`` (``local_path``).  Picking the *largest*
+        # HTML in the render dir instead can surface a captured
+        # sub-resource (an inlined template, an iframe doc) and make the
+        # diff compare the wrong document — so trust local_path here.
+        if kit.discovery_method == "browser_render" and kit.local_path:
+            page_html = Path(kit.local_path)
+            if page_html.is_file() and page_html.suffix.lower() in (".html", ".htm"):
+                try:
+                    return page_html.read_text(encoding="utf-8", errors="replace")
+                except OSError:
+                    pass
+
         # Check extracted directory first, then raw download
         candidates: list[Path] = []
         extract_dir = Path(settings.kit_extract_dir) / str(kit_id)

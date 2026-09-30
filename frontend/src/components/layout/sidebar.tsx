@@ -13,6 +13,7 @@ import {
   Sparkles,
   Fingerprint,
   ScanLine,
+  Workflow,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -29,6 +30,7 @@ const navItems = [
   { to: "/families", icon: Layers, label: "Families" },
   { to: "/yara", icon: ScanLine, label: "Yara" },
   { to: "/phish-diff", icon: FileDiff, label: "PhishDiff" },
+  { to: "/stage-clusters", icon: Workflow, label: "Stage Clusters" },
   { to: "/phish-match", icon: Sparkles, label: "PhishMatch" },
   { to: "/phishprint", icon: Fingerprint, label: "PhishPrint" },
 ];
