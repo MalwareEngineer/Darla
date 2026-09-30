@@ -1,10 +1,18 @@
+import { useMemo, useState } from "react";
 import { Link } from "react-router-dom";
+import { useQueries } from "@tanstack/react-query";
 import { ChevronRight, Package, Layers } from "lucide-react";
 import { StageRoleBadge } from "@/components/shared/stage-role-badge";
 import { KitStatusBadge } from "@/components/shared/kit-status-badge";
-import { useKitScreenshots } from "@/hooks/use-kits";
+import { StageLightbox, type LightboxStage } from "@/components/shared/stage-lightbox";
+import { kits as kitsApi } from "@/lib/api";
 import { cn } from "@/lib/utils";
-import type { FlowKitNode, FlowStageNode, KitStatus } from "@/types/api";
+import type {
+  FlowKitNode,
+  FlowStageNode,
+  KitStatus,
+  ScreenshotsResponse,
+} from "@/types/api";
 
 function navLabel(method?: string | null): string {
   if (!method) return "→";
@@ -22,21 +30,52 @@ function navLabel(method?: string | null): string {
   );
 }
 
-function StageChip({ stage, thumb }: { stage: FlowStageNode; thumb?: string }) {
+function shotFor(
+  path: string | null | undefined,
+  shots: ScreenshotsResponse | undefined,
+): string | undefined {
+  if (!path || !shots) return undefined;
+  const base = path.split("/").pop();
+  return shots.screenshots.find((s) => s.filename === base)?.data_uri;
+}
+
+/** Depth-first flatten of the flow tree into kit nodes in display order. */
+function flattenKits(nodes: FlowKitNode[]): FlowKitNode[] {
+  const out: FlowKitNode[] = [];
+  const walk = (n: FlowKitNode) => {
+    out.push(n);
+    n.children.forEach(walk);
+  };
+  nodes.forEach(walk);
+  return out;
+}
+
+function StageChip({
+  stage,
+  thumb,
+  onOpen,
+}: {
+  stage: FlowStageNode;
+  thumb?: string;
+  onOpen: () => void;
+}) {
   return (
-    <Link
-      to={`/stages/${stage.id}`}
-      className="group flex flex-col gap-1 rounded-md border border-border bg-card px-2.5 py-2 hover:border-primary/50 transition-colors min-w-[140px]"
+    <button
+      type="button"
+      onClick={onOpen}
+      className="group flex flex-col gap-1 rounded-md border border-border bg-card px-2.5 py-2 text-left hover:border-primary/50 transition-colors min-w-[140px]"
       title={stage.url ?? undefined}
     >
       <StageRoleBadge role={stage.role} />
-      {thumb && (
+      {thumb ? (
         <img
           src={thumb}
           alt=""
           loading="lazy"
           className="h-20 w-full rounded border border-border object-cover object-top"
         />
+      ) : (
+        <div className="h-20 w-full rounded border border-dashed border-border/60" />
       )}
       <span className="font-mono text-[11px] text-muted-foreground truncate max-w-[180px]">
         {stage.host ?? stage.url ?? "—"}
@@ -53,28 +92,27 @@ function StageChip({ stage, thumb }: { stage: FlowStageNode; thumb?: string }) {
           <span className="text-orange-400">wraps {stage.aitm_baseline}</span>
         )}
       </div>
-    </Link>
+    </button>
   );
 }
 
-function KitFlowRow({ node, depth }: { node: FlowKitNode; depth: number }) {
-  // Fetch this kit's screenshots once and match each stage to its shot by
-  // filename basename (stage.screenshot_path is relative, e.g.
-  // "_screenshots/02c_lure_cta.png"). Uses the existing authed endpoint so
-  // it works under OIDC as well as disabled mode.
-  const hasShots = node.stages.some((s) => s.screenshot_path);
-  const { data: shots } = useKitScreenshots(node.kit_id, hasShots);
-  const thumbFor = (path?: string | null): string | undefined => {
-    if (!path || !shots) return undefined;
-    const base = path.split("/").pop();
-    return shots.screenshots.find((s) => s.filename === base)?.data_uri;
-  };
+function KitFlowRow({
+  node,
+  depth,
+  shotsByKit,
+  indexOf,
+  onOpen,
+}: {
+  node: FlowKitNode;
+  depth: number;
+  shotsByKit: Map<string, ScreenshotsResponse | undefined>;
+  indexOf: (stageId: string) => number;
+  onOpen: (i: number) => void;
+}) {
+  const shots = shotsByKit.get(node.kit_id);
   return (
     <div>
-      <div
-        className="flex items-start gap-2 py-2"
-        style={{ paddingLeft: `${depth * 20}px` }}
-      >
+      <div className="flex items-start gap-2 py-2" style={{ paddingLeft: `${depth * 20}px` }}>
         <div className="flex flex-col gap-1.5 pt-1 min-w-[150px]">
           <div className="flex items-center gap-1.5">
             <Package className="h-3.5 w-3.5 text-muted-foreground" />
@@ -104,7 +142,11 @@ function KitFlowRow({ node, depth }: { node: FlowKitNode; depth: number }) {
                     <span className="text-[9px] -mt-1">{navLabel(stage.nav_method)}</span>
                   </div>
                 )}
-                <StageChip stage={stage} thumb={thumbFor(stage.screenshot_path)} />
+                <StageChip
+                  stage={stage}
+                  thumb={shotFor(stage.screenshot_path, shots)}
+                  onOpen={() => onOpen(indexOf(stage.id))}
+                />
               </div>
             ))}
           </div>
@@ -116,21 +158,84 @@ function KitFlowRow({ node, depth }: { node: FlowKitNode; depth: number }) {
       </div>
 
       {node.children.map((child) => (
-        <KitFlowRow key={child.kit_id} node={child} depth={depth + 1} />
+        <KitFlowRow
+          key={child.kit_id}
+          node={child}
+          depth={depth + 1}
+          shotsByKit={shotsByKit}
+          indexOf={indexOf}
+          onOpen={onOpen}
+        />
       ))}
     </div>
   );
 }
 
 export function FlowView({ nodes, className }: { nodes: FlowKitNode[]; className?: string }) {
+  const flatKits = useMemo(() => flattenKits(nodes), [nodes]);
+
+  // Fetch every kit's screenshots once, in flow order.
+  const results = useQueries({
+    queries: flatKits.map((k) => ({
+      queryKey: ["kit-screenshots", k.kit_id],
+      queryFn: () => kitsApi.screenshots(k.kit_id),
+      enabled: k.stages.some((s) => s.screenshot_path),
+      staleTime: 60_000,
+    })),
+  });
+  const shotsByKit = useMemo(() => {
+    const m = new Map<string, ScreenshotsResponse | undefined>();
+    flatKits.forEach((k, i) => m.set(k.kit_id, results[i]?.data));
+    return m;
+  }, [flatKits, results]);
+
+  // Flatten stages in display order for the lightbox, resolving each shot.
+  const flatStages: LightboxStage[] = useMemo(() => {
+    const out: LightboxStage[] = [];
+    for (const k of flatKits) {
+      for (const stage of k.stages) {
+        out.push({
+          stage,
+          kitId: k.kit_id,
+          dataUri: shotFor(stage.screenshot_path, shotsByKit.get(k.kit_id)),
+        });
+      }
+    }
+    return out;
+  }, [flatKits, shotsByKit]);
+
+  const indexById = useMemo(() => {
+    const m = new Map<string, number>();
+    flatStages.forEach((s, i) => m.set(s.stage.id, i));
+    return m;
+  }, [flatStages]);
+
+  const [lightbox, setLightbox] = useState<number | null>(null);
+
   if (!nodes.length) {
     return <p className="text-sm text-muted-foreground">No flow data available</p>;
   }
+
   return (
     <div className={cn("space-y-1 overflow-x-auto", className)}>
       {nodes.map((n) => (
-        <KitFlowRow key={n.kit_id} node={n} depth={0} />
+        <KitFlowRow
+          key={n.kit_id}
+          node={n}
+          depth={0}
+          shotsByKit={shotsByKit}
+          indexOf={(id) => indexById.get(id) ?? 0}
+          onOpen={setLightbox}
+        />
       ))}
+      {lightbox !== null && (
+        <StageLightbox
+          stages={flatStages}
+          index={lightbox}
+          onIndex={setLightbox}
+          onClose={() => setLightbox(null)}
+        />
+      )}
     </div>
   );
 }

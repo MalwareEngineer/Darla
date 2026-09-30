@@ -64,6 +64,23 @@ def test_falls_back_to_heuristic_without_log():
     assert manifest[-1]["screenshot_file"] == "_screenshots/03_phish.png"
 
 
+def test_fallback_does_not_duplicate_a_tagged_shot():
+    # 01_landing was captured after a settle, by which point the page had
+    # advanced to stage 1 — so it legitimately tags stage 1. Stage 0 must
+    # NOT also be pasted with the same 01_landing shot.
+    log = [
+        {"seq": 1, "file": "_screenshots/01_landing.png", "blank": False},
+        {"seq": 2, "file": "_screenshots/02_email_blank.png", "blank": True},
+    ]
+    manifest, _ = _assemble_stages_manifest(
+        _navs(), _responses(), "https://login.x.com/", "x", "x", log,
+    )
+    by_seq = {m["seq"]: m for m in manifest}
+    assert by_seq[1]["screenshot_file"] == "_screenshots/01_landing.png"
+    assert by_seq[0]["screenshot_file"] is None  # not duplicated
+    assert by_seq[2]["screenshot_file"] == "_screenshots/02_email_blank.png"
+
+
 def test_terminal_stage_always_has_a_shot():
     # Only an intermediate stage was captured; terminal still gets 03_phish.
     log = [{"seq": 1, "file": "_screenshots/02c_lure_cta.png", "blank": False}]

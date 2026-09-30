@@ -759,10 +759,21 @@ def _assemble_stages_manifest(
                     m["screenshot_file"] = "_screenshots/02_bot_check.png"
                     break
         else:
-            # Ensure the terminal stage always has *some* shot.
-            if not manifest[-1]["screenshot_file"]:
+            # Fill only genuinely-unshot terminal/first stages, and never
+            # duplicate a shot already tagged to another stage.  (The
+            # landing shot is taken after a settle, by which point the
+            # page may already sit on stage 1, so 01_landing legitimately
+            # tags stage 1 — don't also paste it onto stage 0.)
+            used = set(assigned.values())
+            if (
+                not manifest[-1]["screenshot_file"]
+                and "_screenshots/03_phish.png" not in used
+            ):
                 manifest[-1]["screenshot_file"] = "_screenshots/03_phish.png"
-            if not manifest[0]["screenshot_file"]:
+            if (
+                not manifest[0]["screenshot_file"]
+                and "_screenshots/01_landing.png" not in used
+            ):
                 manifest[0]["screenshot_file"] = "_screenshots/01_landing.png"
     return manifest, bodies
 
