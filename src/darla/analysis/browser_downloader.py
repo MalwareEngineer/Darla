@@ -1104,6 +1104,28 @@ async def _async_browser_download(
             # extends patience.
             await _settle_final_page(page)
 
+            # Post-settle email-gate fill.  Many lures reveal the "enter
+            # the email this was sent to" gate only on the *final* page —
+            # after the CTA click or a client-side redirect (the DocuSign
+            # /docusign-agreement-signature step machine is the canonical
+            # case).  The single _fill_email_gate attempt inside
+            # _click_lure_cta already ran on an earlier page that didn't
+            # show the gate yet, so fill + submit it here too and re-settle
+            # so the honey credential actually reaches the form.  Bounded
+            # to a couple of iterations for multi-step gates.
+            for _gate_attempt in range(2):
+                gate = await _fill_email_gate(page)
+                if gate != GATE_FILLED:
+                    break
+                cta_clicked = True  # interaction-driven — suppresses rerender
+                await _take_screenshot(page, screenshots_dir, "02d_email_gate")
+                await _submit_email_gate(page)
+                with contextlib.suppress(TimeoutError, Exception):
+                    await asyncio.wait_for(
+                        page.wait_for_load_state("networkidle"), timeout=15,
+                    )
+                await _settle_final_page(page)
+
             # Screenshot: final phishing page (stage 3)
             await _take_screenshot(page, screenshots_dir, "03_phish")
 
@@ -1506,6 +1528,37 @@ _TEXT_INPUT_TYPES = {"", "text", "email"}
 
 
 GATE_NONE, GATE_FILLED, GATE_UNFILLED = "none", "filled", "unfilled"
+
+
+async def _submit_email_gate(page) -> None:
+    """Submit the current email-gate form after it's been filled.
+
+    Clicks a submit/continue-style control if one is present, otherwise
+    presses Enter (single-input gates submit on Enter).  Best-effort —
+    any failure is swallowed so the render still captures the page.
+    """
+    clicked = False
+    with contextlib.suppress(Exception):
+        clicked = await page.evaluate("""
+            () => {
+                const els = document.querySelectorAll(
+                    'button, input[type=submit], [role=button], a[href]'
+                );
+                for (const b of els) {
+                    if (b.type === 'submit') { b.click(); return true; }
+                    const t = ((b.value || '') + ' ' + (b.textContent || ''))
+                        .trim().toLowerCase();
+                    if (/^(continue|next|submit|verify|proceed|view|access|sign ?in|open)/.test(t)) {
+                        b.click();
+                        return true;
+                    }
+                }
+                return false;
+            }
+        """)
+    if not clicked:
+        with contextlib.suppress(Exception):
+            await page.keyboard.press("Enter")
 
 
 async def _fill_email_gate(page) -> str:
