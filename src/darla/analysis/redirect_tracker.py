@@ -4,6 +4,7 @@ Manually follows redirects hop-by-hop to capture the full redirect chain,
 instead of httpx's automatic follow_redirects=True which silently resolves.
 """
 
+import contextlib
 import logging
 import re
 from dataclasses import dataclass, field
@@ -181,6 +182,90 @@ def _extract_js_redirect(body: str, base_url: str) -> str | None:
     return live[0]
 
 
+def _write_root_stages(
+    dest_path,
+    chain,
+    hop_bodies: list[tuple[str, str]],
+    final_url: str,
+    final_text: str,
+) -> None:
+    """Write ``stages.json`` + ``_stages/`` bodies for an httpx chain.
+
+    Each redirect hop becomes a stage (a pure 3xx hop is a body-less
+    ``redirector``; a JS/meta-refresh hop keeps the interstitial body it
+    served); the final response is the terminal stage.  Consumed by
+    :func:`darla.analysis.staging.segment_render`, exactly like a browser
+    render's own manifest.
+    """
+    import json as _json
+    from pathlib import Path as _Path
+
+    dest_path = _Path(dest_path)
+    body_by_url = dict(hop_bodies)
+    stages_dir = dest_path / "_stages"
+    manifest: list[dict] = []
+    bodies: dict[str, str] = {}
+
+    def _nav_method(status: int | None) -> str:
+        if status and 300 <= status < 400:
+            return "http_3xx"
+        return "js_location"
+
+    seq = 0
+    for hop in chain.hops:
+        body = body_by_url.get(hop.url, "")
+        body_file = None
+        if body:
+            body_file = f"_stages/stage_{seq:02d}.html"
+            bodies[body_file] = body
+        manifest.append({
+            "seq": seq,
+            "url": hop.url,
+            "nav_method": "initial" if seq == 0 else _nav_method(hop.status_code),
+            "body_file": body_file,
+            "status_code": hop.status_code,
+            "content_type": "text/html" if body else None,
+            "visible_text": _strip_tags(body),
+            "markers": {},
+        })
+        seq += 1
+
+    # Terminal stage — the final downloaded page.
+    final_body_file = None
+    if final_text:
+        final_body_file = f"_stages/stage_{seq:02d}.html"
+        bodies[final_body_file] = final_text
+    manifest.append({
+        "seq": seq,
+        "url": final_url,
+        "nav_method": _nav_method(chain.hops[-1].status_code) if chain.hops else "initial",
+        "body_file": final_body_file,
+        "status_code": 200,
+        "content_type": "text/html" if final_text else None,
+        "visible_text": _strip_tags(final_text),
+        "markers": {},
+    })
+
+    if bodies:
+        stages_dir.mkdir(parents=True, exist_ok=True)
+        for rel, text in bodies.items():
+            with contextlib.suppress(OSError):
+                (dest_path / rel).write_text(text, encoding="utf-8")
+    (dest_path / "stages.json").write_text(
+        _json.dumps({"stages": manifest, "final_url": final_url}, indent=2),
+        encoding="utf-8",
+    )
+
+
+_ROOT_TAG_RE = re.compile(r"<[^>]+>")
+
+
+def _strip_tags(html: str, limit: int = 4000) -> str:
+    if not html:
+        return ""
+    return re.sub(r"\s+", " ", _ROOT_TAG_RE.sub(" ", html)).strip()[:limit]
+
+
 class RedirectTracker:
     """Download a URL while capturing the full redirect chain."""
 
@@ -203,6 +288,10 @@ class RedirectTracker:
 
         current_url = url
         redirect_codes = {301, 302, 303, 307, 308}
+        # Bodies of client-side (JS/meta-refresh) hops, kept so the flow
+        # model can show the interstitial pages the victim was walked
+        # through — not just their URLs.  Keyed insertion-ordered.
+        hop_bodies: list[tuple[str, str]] = []
 
         try:
             # Use follow_redirects=False to capture each hop
@@ -253,6 +342,7 @@ class RedirectTracker:
                             body_text = response.content.decode("utf-8", errors="ignore")
                         js_target = _extract_js_redirect(body_text, current_url)
                         if js_target and js_target != current_url:
+                            hop_bodies.append((current_url, body_text))
                             chain.hops.append(RedirectHop(
                                 url=current_url,
                                 status_code=response.status_code,
@@ -281,6 +371,22 @@ class RedirectTracker:
                         "Downloaded %s (%d bytes, %d redirects) to %s",
                         url, len(content), chain.total_redirects, filepath,
                     )
+
+                    # Emit a stage manifest for the redirect chain so the
+                    # flow view shows the hops the victim traversed.  Best
+                    # effort — never fail a good download over it.
+                    if chain.hops:
+                        final_text = ""
+                        if "html" in content_type or "text" in content_type:
+                            final_text = content.decode("utf-8", errors="replace")
+                        try:
+                            _write_root_stages(
+                                dest_path, chain, hop_bodies,
+                                current_url, final_text,
+                            )
+                        except Exception as se:
+                            logger.debug("Failed to write root stages.json: %s", se)
+
                     return filepath, "ok", chain
 
                 # Exceeded max redirects

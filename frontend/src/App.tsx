@@ -15,6 +15,9 @@ import { CampaignDetailPage } from "@/pages/campaign-detail";
 import { FamiliesPage } from "@/pages/families";
 import { FamilyDetailPage } from "@/pages/family-detail";
 import { PhishDiffPage } from "@/pages/phish-diff";
+import { StageDetailPage } from "@/pages/stage-detail";
+import { FlowDiffPage } from "@/pages/flow-diff";
+import { StageClustersPage } from "@/pages/stage-clusters";
 import { YaraPage } from "@/pages/yara";
 import { PhishMatchPage } from "@/pages/phish-match";
 import { PhishMatchInboxPage } from "@/pages/phish-match-inbox";
@@ -52,6 +55,9 @@ export function App() {
         <Route path="families/:id" element={<FamilyDetailPage />} />
         <Route path="yara" element={<YaraPage />} />
         <Route path="phish-diff" element={<PhishDiffPage />} />
+        <Route path="stages/:id" element={<StageDetailPage />} />
+        <Route path="flow-diff" element={<FlowDiffPage />} />
+        <Route path="stage-clusters" element={<StageClustersPage />} />
         <Route path="phish-match" element={<PhishMatchInboxPage />} />
         <Route path="phish-match/:kitId" element={<PhishMatchPage />} />
         <Route path="phishprint" element={<PhishPrintPage />} />

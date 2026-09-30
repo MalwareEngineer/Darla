@@ -17,6 +17,7 @@ Dedup strategy:
   ``duplicate_of_kit_id`` set and files preserved on disk.
 """
 
+import contextlib
 import logging
 import uuid
 from pathlib import Path
@@ -783,6 +784,23 @@ def browser_download_kit(
             }
 
         db.commit()
+
+        # Segment the render into stages (lure → gate → cred page) and
+        # store per-stage fingerprints + content-addressed resources.
+        # Runs in its own transaction AFTER the render is durably
+        # committed, so a manifest problem can only roll back the stage
+        # work — never the kit metadata, hashes, or fragment IOCs above.
+        try:
+            from darla.services.stage_service import build_and_store_stages
+
+            build_and_store_stages(db, child_kit, download_dir)
+            db.commit()
+        except Exception as stage_err:
+            logger.debug(
+                "Kit %s: stage segmentation failed: %s", child_id, stage_err,
+            )
+            with contextlib.suppress(Exception):
+                db.rollback()
 
         logger.info(
             "Browser downloaded child kit %s (parent %s): %s (%d bytes)",

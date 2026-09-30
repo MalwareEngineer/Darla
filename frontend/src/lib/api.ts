@@ -17,6 +17,12 @@ import type {
   InvestigationDetail,
   InvestigationTreeNode,
   InvestigationSubmitResponse,
+  FlowKitNode,
+  FlowDiffResponse,
+  StageDetail,
+  SimilarStage,
+  StageClusterView,
+  CooccurrenceView,
   IndicatorSummary,
   IndicatorDetail,
   IndicatorStats,
@@ -185,6 +191,9 @@ export const investigations = {
     request<PaginatedResponse<InvestigationSummary>>(`/investigations?offset=${offset}&limit=${limit}`),
   get: (id: string) => request<InvestigationDetail>(`/investigations/${id}`),
   tree: (id: string) => request<InvestigationTreeNode[]>(`/investigations/${id}/tree`),
+  flow: (id: string) => request<FlowKitNode[]>(`/investigations/${id}/flow`),
+  flowDiff: (id: string, other: string) =>
+    request<FlowDiffResponse>(`/investigations/${id}/flow-diff/${other}`),
   kits: (id: string, offset = 0, limit = 50) =>
     request<PaginatedResponse<KitSummary>>(`/investigations/${id}/kits?offset=${offset}&limit=${limit}`),
   create: (data: {
@@ -222,6 +231,20 @@ export const investigations = {
       method: "POST",
       body: JSON.stringify({ ids }),
     }),
+};
+
+// ── Stages / attack-flow ──
+
+export const stages = {
+  get: (id: string) => request<StageDetail>(`/stages/${id}`),
+  similar: (id: string, limit = 50) =>
+    request<SimilarStage[]>(`/stages/${id}/similar?limit=${limit}`),
+  clusters: (role: string) =>
+    request<StageClusterView[]>(`/stages/clusters?role=${encodeURIComponent(role)}`),
+  cooccurrence: (roleA = "bot_check", roleB = "cred_capture") =>
+    request<CooccurrenceView>(
+      `/stages/cooccurrence?role_a=${encodeURIComponent(roleA)}&role_b=${encodeURIComponent(roleB)}`,
+    ),
 };
 
 // ── Indicators ──

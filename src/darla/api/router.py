@@ -31,6 +31,7 @@ from darla.api import (
     kits,
     monitored_domains,
     phishmatch,
+    stages,
     victims,
     yara,
 )
@@ -72,6 +73,9 @@ api_router.include_router(
     dependencies=_AUTH,
 )
 api_router.include_router(diff.router, prefix="/diff", tags=["diff"], dependencies=_AUTH)
+api_router.include_router(
+    stages.router, prefix="/stages", tags=["stages"], dependencies=_AUTH,
+)
 api_router.include_router(yara.router, prefix="/yara", tags=["yara"], dependencies=_AUTH)
 api_router.include_router(
     phishmatch.router, prefix="/phishmatch", tags=["phishmatch"],

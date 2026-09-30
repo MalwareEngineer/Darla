@@ -146,6 +146,136 @@ export interface InvestigationTreeNode {
   nav_path?: string[] | null;
 }
 
+// ── Stages / attack-flow model ──
+
+export type StageRole =
+  | "lure"
+  | "redirector"
+  | "bot_check"
+  | "interstitial"
+  | "email_gate"
+  | "cred_capture"
+  | "decoy"
+  | "post_submit"
+  | "unknown";
+
+export interface FlowStageNode {
+  id: string;
+  kit_id: string;
+  seq: number;
+  url?: string | null;
+  host?: string | null;
+  role: StageRole;
+  nav_method?: string | null;
+  screenshot_path?: string | null;
+  dwell_seconds?: number | null;
+  aitm_baseline?: string | null;
+  resource_count: number;
+}
+
+export interface FlowKitNode {
+  kit_id: string;
+  source_url: string;
+  discovery_method?: string | null;
+  chain_depth: number;
+  status: string;
+  stages: FlowStageNode[];
+  children: FlowKitNode[];
+}
+
+export interface StageResourceView {
+  id: string;
+  resource_id: string;
+  url?: string | null;
+  initiator?: string | null;
+  doc_seq?: number | null;
+  ts?: number | null;
+  sha256?: string | null;
+  content_type?: string | null;
+  size?: number | null;
+}
+
+export interface StageDetail {
+  id: string;
+  kit_id: string;
+  seq: number;
+  url?: string | null;
+  host?: string | null;
+  role: StageRole;
+  nav_method?: string | null;
+  screenshot_path?: string | null;
+  body_path?: string | null;
+  status_code?: number | null;
+  content_type?: string | null;
+  dwell_seconds?: number | null;
+  aitm_baseline?: string | null;
+  tlsh_raw?: string | null;
+  tlsh_rendered?: string | null;
+  skeleton_hash?: string | null;
+  request_shape_hash?: string | null;
+  screenshot_phash?: string | null;
+  fingerprint: Record<string, unknown>;
+  resource_count: number;
+  resources: StageResourceView[];
+  created_at?: string | null;
+}
+
+export interface StageComparisonSignal {
+  name: string;
+  verdict: string;
+  detail: string;
+  score: number | null;
+}
+
+export interface StageComparison {
+  verdict: string;
+  score: number;
+  signals: StageComparisonSignal[];
+}
+
+export interface SimilarStage {
+  stage_id: string;
+  kit_id: string;
+  url?: string | null;
+  host?: string | null;
+  role: StageRole;
+  score: number;
+  verdict: string;
+  comparison: StageComparison;
+}
+
+export interface StageClusterView {
+  cluster_id: string;
+  role: StageRole;
+  size: number;
+  stage_ids: string[];
+  hosts: string[];
+}
+
+export interface CooccurrenceView {
+  role_a: StageRole;
+  role_b: StageRole;
+  clusters_a: StageClusterView[];
+  clusters_b: StageClusterView[];
+  matrix: Record<string, Record<string, number>>;
+}
+
+export interface FlowDiffPair {
+  kind: "match" | "only_a" | "only_b";
+  role?: StageRole | null;
+  a_stage_id?: string | null;
+  b_stage_id?: string | null;
+  a_host?: string | null;
+  b_host?: string | null;
+  comparison?: StageComparison | null;
+}
+
+export interface FlowDiffResponse {
+  investigation_a: string;
+  investigation_b: string;
+  pairs: FlowDiffPair[];
+}
+
 export interface InvestigationSubmitResponse {
   investigation_id: string;
   kit_id: string;

@@ -612,6 +612,133 @@ async def _settle_final_page(
         await asyncio.wait_for(page.wait_for_load_state("networkidle"), timeout=8)
 
 
+_PASSWORD_INPUT_RE = re.compile(
+    r"<input\b[^>]*\btype\s*=\s*['\"]?password", re.IGNORECASE
+)
+_TAG_RE = re.compile(r"<[^>]+>")
+
+
+def _stage_markers(body_text: str, url: str) -> dict:
+    """Cheap per-stage marker booleans derived from a page body.
+
+    Used by the stage classifier — see
+    :func:`darla.analysis.staging.classify_role`.  Substring/regex only,
+    so it is safe to run over either a raw server response or a rendered
+    DOM snapshot.
+    """
+    from darla.analysis.stage_fingerprint import detect_idp_baseline
+
+    low = (body_text or "").lower()
+    return {
+        "turnstile": (
+            "cf-turnstile" in low
+            or "challenges.cloudflare.com/turnstile" in low
+            or "data-sitekey" in low
+        ),
+        "password_field": bool(_PASSWORD_INPUT_RE.search(body_text or "")),
+        "has_form": "<form" in low,
+        "idp": detect_idp_baseline(body_text or "", url or "") is not None,
+    }
+
+
+def _visible_from_html(body_text: str, limit: int = 4000) -> str:
+    """Rough visible-text extraction from raw HTML (tag strip)."""
+    if not body_text:
+        return ""
+    text = _TAG_RE.sub(" ", body_text)
+    return re.sub(r"\s+", " ", text).strip()[:limit]
+
+
+def _assemble_stages_manifest(
+    main_frame_navs: list[dict],
+    captured_responses: list[dict],
+    final_url: str,
+    final_content: str,
+    final_visible_text: str,
+) -> tuple[list[dict], dict[str, str]]:
+    """Build the ``stages.json`` manifest + per-stage body files.
+
+    Returns ``(manifest, bodies)`` where ``manifest`` is the list stored
+    under ``stages.json``'s ``"stages"`` key and ``bodies`` maps each
+    stage's relative body filename to the text to write.  For the final
+    stage the rendered DOM is used as the body; earlier stages use the
+    raw document response captured for that URL.  Returns ``([], {})``
+    when no main-frame navigations were observed (older browsers / no
+    instrumentation) so the caller falls back to single-page behaviour.
+    """
+    if not main_frame_navs:
+        return [], {}
+
+    # Index the last document response per URL (the settled response).
+    doc_resp_by_url: dict[str, dict] = {}
+    for r in captured_responses:
+        ct = (r.get("content_type") or "").lower()
+        if "html" in ct or "text" in ct or not ct:
+            doc_resp_by_url[r["url"]] = r
+
+    last_ts = max(
+        (r.get("timestamp", 0) for r in captured_responses), default=0.0,
+    )
+
+    manifest: list[dict] = []
+    bodies: dict[str, str] = {}
+    n = len(main_frame_navs)
+    for idx, nav in enumerate(main_frame_navs):
+        seq = nav.get("seq", idx)
+        url = nav.get("url") or ""
+        is_final = idx == n - 1
+        started = nav.get("started_ts", 0.0)
+        ended = main_frame_navs[idx + 1]["started_ts"] if idx + 1 < n else last_ts
+        if ended is not None and ended < started:
+            ended = started
+
+        resp = doc_resp_by_url.get(url)
+        if is_final and final_content:
+            body_text = final_content
+            visible = final_visible_text or _visible_from_html(final_content)
+        elif resp is not None:
+            raw = resp.get("body")
+            if isinstance(raw, bytes):
+                body_text = raw.decode("utf-8", errors="replace")
+            else:
+                body_text = str(raw or "")
+            visible = _visible_from_html(body_text)
+        else:
+            body_text = ""
+            visible = ""
+
+        body_file = f"_stages/stage_{seq:02d}.html"
+        if body_text:
+            bodies[body_file] = body_text
+
+        manifest.append({
+            "seq": seq,
+            "url": url,
+            "nav_method": "initial" if idx == 0 else None,
+            "body_file": body_file if body_text else None,
+            "screenshot_file": None,  # filled from named stage shots below
+            "status_code": resp.get("status") if resp else None,
+            "content_type": (resp.get("content_type") if resp else None)
+            or ("text/html" if is_final else None),
+            "started_ts": started,
+            "ended_ts": ended,
+            "visible_text": visible,
+            "markers": _stage_markers(body_text, url),
+        })
+
+    # Best-effort screenshot assignment: the first stage gets the landing
+    # shot, a bot-check stage the bot-check shot, the final stage the
+    # phish shot.  Purely cosmetic for the flow view.
+    if manifest:
+        manifest[0]["screenshot_file"] = "_screenshots/01_landing.png"
+        manifest[-1]["screenshot_file"] = "_screenshots/03_phish.png"
+        for m in manifest:
+            if m["markers"].get("turnstile"):
+                m["screenshot_file"] = "_screenshots/02_bot_check.png"
+                break
+    return manifest, bodies
+
+
 async def _take_screenshot(page, screenshots_dir: Path, stage: str) -> Path | None:
     """Take a screenshot and save it with a stage label."""
     try:
@@ -679,6 +806,35 @@ async def _async_browser_download(
     ws_frames: list[dict] = []
     ws_counter = 0
 
+    # Main-frame navigation tracking — the backbone of the stage model.
+    # Each top-level navigation is a new document the victim was walked
+    # to; ``doc_seq`` increments per main-frame nav and stamps every
+    # network entry so resources can be attributed to the page that
+    # loaded them, and ``main_frame_navs`` records the ordered pages.
+    doc_seq = 0
+    main_frame_navs: list[dict] = []
+
+    def _on_framenav(frame):
+        """Record each top-level (main-frame) navigation as a new stage."""
+        nonlocal doc_seq
+        try:
+            if frame != page.main_frame:
+                return  # sub-frame (iframe) — not a hop the victim took
+            url = getattr(frame, "url", "") or ""
+            elapsed = time.monotonic() - nav_start_time if nav_start_time else 0
+            # Collapse a repeated nav to the identical URL (SPA re-render,
+            # fresh-context retry of the same lure) into the current stage.
+            if main_frame_navs and main_frame_navs[-1]["url"] == url:
+                return
+            main_frame_navs.append({
+                "seq": len(main_frame_navs),
+                "url": url,
+                "started_ts": round(elapsed, 3),
+            })
+            doc_seq = len(main_frame_navs) - 1
+        except Exception as e:
+            logger.debug("framenavigated handler failed: %s", e)
+
     async def _on_request(request):
         """Log every outgoing request."""
         nonlocal nav_start_time
@@ -692,6 +848,7 @@ async def _async_browser_download(
             "resource_type": request.resource_type,
             "headers": dict(request.headers),
             "timestamp": round(elapsed, 3),
+            "doc_seq": doc_seq,
             "type": "request",
         }
         with contextlib.suppress(Exception):
@@ -775,6 +932,7 @@ async def _async_browser_download(
             "content_type": response.headers.get("content-type", ""),
             "headers": dict(response.headers),
             "timestamp": round(elapsed, 3),
+            "doc_seq": doc_seq,
             "type": "response",
         }
         network_log.append(entry)
@@ -822,6 +980,7 @@ async def _async_browser_download(
             page.on("request", _on_request)
             page.on("response", _on_response)
             page.on("websocket", _on_websocket)
+            page.on("framenavigated", _on_framenav)
 
             # Intercept IP/geo cloaking lookups used by phishing gates
             # (ipinfo.io, ipapi.is, ipapi.co, ip-api.com, etc.) so the
@@ -871,6 +1030,7 @@ async def _async_browser_download(
                 page.on("request", _on_request)
                 page.on("response", _on_response)
                 page.on("websocket", _on_websocket)
+                page.on("framenavigated", _on_framenav)
                 await page.route("**/ipinfo.io/**", _handle_ipinfo_route)
 
                 nav_start_time = time.monotonic()
@@ -950,6 +1110,13 @@ async def _async_browser_download(
             # Capture final page content
             content = await page.content()
             final_url = page.url
+
+            # Visible text of the final page — feeds stage role
+            # classification (bot-check / interstitial / post-submit
+            # markers read better off innerText than raw HTML).
+            final_visible_text = ""
+            with contextlib.suppress(Exception):
+                final_visible_text = (await page.inner_text("body"))[:8000]
 
             if not content or len(content) < 100:
                 return None, "Browser captured empty or minimal page content", None, False
@@ -1121,6 +1288,37 @@ async def _async_browser_download(
                 )
             except Exception as e:
                 logger.debug("Failed to save requests.json: %s", e)
+
+            # Save the stage manifest (attack-flow segmentation).  One
+            # entry per main-frame navigation, with per-stage body files
+            # under _stages/.  Consumed by
+            # darla.analysis.staging.segment_render at render finalise.
+            try:
+                stage_manifest, stage_bodies = _assemble_stages_manifest(
+                    main_frame_navs, captured_responses,
+                    final_url or url, content, final_visible_text,
+                )
+                if stage_manifest:
+                    stages_dir = dest_path / "_stages"
+                    stages_dir.mkdir(parents=True, exist_ok=True)
+                    for rel, text in stage_bodies.items():
+                        try:
+                            (dest_path / rel).write_text(text, encoding="utf-8")
+                        except OSError as we:
+                            logger.debug("Failed to write %s: %s", rel, we)
+                    (dest_path / "stages.json").write_text(
+                        json.dumps(
+                            {"stages": stage_manifest, "final_url": final_url},
+                            indent=2, default=str,
+                        ),
+                        encoding="utf-8",
+                    )
+                    logger.info(
+                        "Wrote stages.json (%d stages) for %s",
+                        len(stage_manifest), url,
+                    )
+            except Exception as e:
+                logger.debug("Failed to save stages.json: %s", e)
 
             # Save WebSocket frames as JSONL (one object per line).
             # Only written when at least one frame was captured so kits
